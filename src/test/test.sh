@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 2006 Joachim Henke
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 fail_exit()
 {
 	echo 'FAILED!'

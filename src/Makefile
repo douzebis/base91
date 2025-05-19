@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 2006 Joachim Henke
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 CC = gcc
 CFLAGS = -Wall -W -O2
 LDFLAGS = -s

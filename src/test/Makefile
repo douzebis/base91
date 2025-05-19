@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 2006 Joachim Henke
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 SHELL = /bin/sh
 
 .PHONY: all clean
