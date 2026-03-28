@@ -2,24 +2,24 @@
 #
 # SPDX-License-Identifier: MIT
 
-name: Rust CI
+name: C
 
 on:
   push:
     branches: [main]
     paths:
-      - 'rust/**'
+      - 'src/**'
       - 'default.nix'
-      - '.github/workflows/rust.yml'
+      - '.github/workflows/c.yml'
   pull_request:
     paths:
-      - 'rust/**'
+      - 'src/**'
       - 'default.nix'
-      - '.github/workflows/rust.yml'
+      - '.github/workflows/c.yml'
 
 jobs:
-  ci:
-    name: fmt / clippy / test
+  build:
+    name: clang build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,12 +32,5 @@ jobs:
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
         continue-on-error: true
 
-      - name: cargo fmt
-        run: nix-build default.nix -A rust-fmt
-
-      - name: cargo clippy
-        run: nix-build default.nix -A rust-clippy
-
-      - name: cargo test
-        run: nix-build default.nix -A rust-tests
-
+      - name: build libbase91
+        run: nix-build default.nix -A base91-clib
