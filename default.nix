@@ -191,8 +191,9 @@ let
 
     nativeBuildInputs = [ pkgs.go ];
 
-    # Point the Go module cache at a writable directory inside the sandbox.
+    # Point the Go module and build caches at writable locations in the sandbox.
     GOPATH  = "/tmp/gopath";
+    GOCACHE = "/tmp/gocache";
     GOFLAGS = "-mod=mod";
 
     buildPhase = ''
