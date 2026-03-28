@@ -165,5 +165,7 @@ pub fn stub_info() -> pyo3_stub_gen::Result<StubInfo> {
     StubInfo::from_project_root(
         "pybase91".to_string(),
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        false,
+        Default::default(),
     )
 }

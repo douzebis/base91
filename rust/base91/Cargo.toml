@@ -40,8 +40,8 @@ c-compat-tests = ["dep:cc"]
 
 [dependencies]
 pyo3                 = { version = "0.26", features = ["extension-module"], optional = true }
-pyo3-stub-gen        = { version = "0.17", optional = true }
-pyo3-stub-gen-derive = { version = "0.17", optional = true }
+pyo3-stub-gen        = { version = "0.20", optional = true }
+pyo3-stub-gen-derive = { version = "0.20", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
