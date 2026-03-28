@@ -24,12 +24,14 @@ let
   pythonExecutable = "${pythonBin}/bin/python3";
 
   # Source for pure-Rust builds (scoped to rust/ so C sources don't affect
-  # the hash).  The filter retains Cargo sources plus binary test fixtures.
+  # the hash).  The filter retains Cargo sources, binary test fixtures, and
+  # README.md files (maturin reads them from Cargo.toml's readme field).
   rustSrc = pkgs.lib.cleanSourceWith {
     src    = pkgs.lib.cleanSource ./rust;
     filter = path: type:
       crane.filterCargoSources path type
-      || builtins.match ".*/tests/fixtures/.*" path != null;
+      || builtins.match ".*/tests/fixtures/.*" path != null
+      || builtins.match ".*/README\\.md$" path != null;
   };
 
   # Source tree extended with src/base91.{c,h} for bench builds that enable
@@ -218,25 +220,33 @@ let
   # ---------------------------------------------------------------------------
   # PYTHON EXTENSION — PyO3 bindings via maturin
   #
-  # maturin drives the full cargo build and packages the .so as a wheel.
-  # maturinBuildHook (provided by nixpkgs) makes buildPythonPackage speak
-  # maturin natively — no separate crane derivation needed.
+  # Uses rustPlatform.maturinBuildHook (nixpkgs standard), not crane.
+  # cargoSetupHook vendors deps; maturinBuildHook drives the maturin build.
   # ---------------------------------------------------------------------------
   pybase91 = pkgs.python313Packages.buildPythonPackage {
-    pname   = "pybase91";
-    version = "0.2.1";
-    format  = "pyproject";
-    src     = ./rust/base91;
+    pname    = "pybase91";
+    version  = "0.2.1";
+    pyproject = true;
+    src      = rustSrc;
+
+    cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+      pname   = "pybase91";
+      version = "0.2.1";
+      src     = rustSrc;
+      hash    = "sha256-Xxph31cpLJjHA3EzU0541FM0IIkCTA9HHpWM8IiXHkQ=";
+    };
+
+    # maturin must be invoked from the crate subdirectory (not the workspace root)
+    buildAndTestSubdir = "base91";
 
     nativeBuildInputs = [
       pkgs.cargo
       pkgs.rustc
-      pkgs.maturin
-      pkgs.python313Packages.maturin  # provides maturinBuildHook
-      pkgs.pkg-config
+      pkgs.rustPlatform.cargoSetupHook
+      pkgs.rustPlatform.maturinBuildHook
     ];
 
-    buildInputs = [ pythonBin ];
+    maturinBuildFlags = [ "--features" "python" ];
 
     env.PYO3_PYTHON = pythonExecutable;
 
