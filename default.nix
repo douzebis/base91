@@ -20,7 +20,7 @@ let
   # ---------------------------------------------------------------------------
   # PYTHON INTERPRETER (for PyO3 extension)
   # ---------------------------------------------------------------------------
-  pythonBin        = pkgs.python312;
+  pythonBin        = pkgs.python313;
   pythonExecutable = "${pythonBin}/bin/python3";
 
   # Source for pure-Rust builds (scoped to rust/ so C sources don't affect
@@ -151,10 +151,12 @@ let
     version = "0.2.0";
     src     = ./src;
 
+    nativeBuildInputs = [ pkgs.clang pkgs.llvmPackages.bintools ];
+
     buildPhase = ''
-      gcc -O2 -fPIC -shared -o libbase91.so base91.c
-      gcc -O2 -c base91.c -o base91.o
-      ar crs libbase91.a base91.o
+      clang -O3 -fno-plt -fPIC -shared -o libbase91.so base91.c
+      clang -O3 -fno-plt -c base91.c -o base91.o
+      llvm-ar crs libbase91.a base91.o
     '';
 
     installPhase = ''
@@ -217,7 +219,7 @@ let
   # maturinBuildHook (provided by nixpkgs) makes buildPythonPackage speak
   # maturin natively — no separate crane derivation needed.
   # ---------------------------------------------------------------------------
-  pybase91 = pkgs.python312Packages.buildPythonPackage {
+  pybase91 = pkgs.python313Packages.buildPythonPackage {
     pname   = "pybase91";
     version = "0.2.0";
     format  = "pyproject";
@@ -227,7 +229,7 @@ let
       pkgs.cargo
       pkgs.rustc
       pkgs.maturin
-      pkgs.python312Packages.maturin  # provides maturinBuildHook
+      pkgs.python313Packages.maturin  # provides maturinBuildHook
       pkgs.pkg-config
     ];
 
@@ -264,11 +266,12 @@ let
       clippy
       # Go toolchain
       go
-      # C toolchain — only needed to run benches with --features c-compat-tests
-      gcc
-      binutils        # objcopy + ar (build.rs symbol rename for c-compat-tests)
+      # C toolchain
+      clang           # C compiler (LLVM backend, used for bench and libbase91)
+      llvmPackages.bintools  # llvm-objcopy + llvm-ar (build.rs symbol rename)
+      binutils        # objcopy + ar fallback; keep for c-compat-tests build.rs
       # Python + maturin (for PyO3 development builds and PyPI publishing)
-      python312
+      python313
       maturin
       pkg-config
       # REUSE / SPDX compliance

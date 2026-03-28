@@ -444,24 +444,56 @@ second byte — exactly the unrolled pattern specified.
 
 ---
 
-## 8. Benchmark results (criterion, rustc 1.86.0, gcc 14.3.0, x86-64)
+## 8. Benchmark results
+
+### 8.1 Rust vs C (criterion, rustc 1.86.0, clang 21.1.7 -O3, x86-64)
 
 1 MiB random input.  Intel Core Ultra 7 165U, AC power, turbo enabled.
+Criterion 100-sample run.  Throughput measured on input bytes for encode,
+encoded bytes for decode.
 
-| Path | Rust unchecked | C reference | Ratio |
+| Implementation | Encode | Decode |
+|---|---|---|
+| Rust unchecked | **~1.016 GiB/s (~1041 MiB/s)** | **~1.210 GiB/s (~1239 MiB/s)** |
+| C (clang -O3, `__restrict__`, static tables, dup writes) | **~1.017 GiB/s (~1042 MiB/s)** | ~1.153 GiB/s (~1181 MiB/s) |
+| Rust safe (`spare_capacity_mut`) | ~919 MiB/s | ~972 MiB/s |
+
+**Encode is tied** (~1.017 GiB/s each) after duplicating the write block into
+each encode arm (§12.3, §12.4).  **Decode: Rust leads C by ~5%**: the remaining
+gap is Clang's register allocation for the decode scan loops vs LLVM in rustc.
+**Rust safe** now at ~90% of unchecked after switching from `Vec::push` to
+`spare_capacity_mut` + `set_len` (§14).
+
+### 8.2 All-language comparison (1 MiB random input, same machine)
+
+Methodology:
+- **C**: `bench.c` — `clock_gettime(CLOCK_MONOTONIC)`, 50 iterations after
+  5 warmup, throughput on input/encoded bytes respectively.
+- **Rust**: criterion via `cargo bench --features c-compat-tests`.
+- **Go**: `go test -bench=. -benchtime=5s`, pre-allocated output buffer
+  (no allocation in the hot loop), throughput reported by `b.SetBytes`.
+- **Python**: `pybase91` PyO3 extension; `time.perf_counter`, 50 iterations
+  after 5 warmup, 1 MiB random input.  The extension calls into
+  `crate::encode` / `crate::decode` (which use the safe `spare_capacity_mut`
+  path) with zero-copy `bytes → &[u8]` conversion via PyO3.
+
+| Language | Encode | Decode | Notes |
 |---|---|---|---|
-| encode | ~1010 MiB/s | ~645 MiB/s | **Rust +56%** |
-| decode | ~1020 MiB/s | ~528 MiB/s | **Rust +93%** |
+| Rust unchecked | **~1041 MiB/s** | **~1239 MiB/s** | raw pointer output |
+| C (clang -O3, `__restrict__`, static tables, dup writes) | **~1042 MiB/s** | ~1181 MiB/s | native, no bounds checks |
+| Rust safe (`spare_capacity_mut`) | ~919 MiB/s | ~972 MiB/s | pre-reserved, one `unsafe` |
+| Python (pybase91 PyO3) | ~566 MiB/s | ~998 MiB/s | Rust core + Python object alloc |
+| Go | 571 MiB/s | 517 MiB/s | pre-allocated slice, zero allocs |
 
-### Encode performance history
+### 8.3 Encode performance history (Rust)
 
-The encode path required two targeted fixes to beat C:
+The encode path required two targeted fixes to beat the *unpatched* C:
 
 1. **`ENCTAB.get_unchecked()`** — LLVM inserted `jae` panic branches for
    each `ENCTAB[r]` and `ENCTAB[q]` index because it could not statically
    prove `r,q < 91`.  Even though they were never taken, they consumed
    front-end bandwidth.  Replacing with `get_unchecked` removed them.
-   Result: parity with C (~634 vs ~641 MiB/s).
+   Result: parity with unpatched C (~634 vs ~641 MiB/s).
 
 2. **Duplicated writes per arm** — with the two 13/14-bit paths sharing a
    single write block at the bottom, LLVM merged them into a
@@ -470,12 +502,247 @@ The encode path required two targeted fixes to beat C:
    register, costing more than C's simple well-predicted branch.
    Duplicating the writes into each arm breaks the merge, giving LLVM two
    independent paths with immediate-count shifts.
-   Result: Rust +56% over C.
+   Result: Rust +56% over *unpatched* C (~1010 vs ~645 MiB/s at the time).
 
-### Decode performance history
+### 8.4 Decode performance history (Rust)
 
-Decode was faster than C from the first implementation, because:
+Decode was faster than *unpatched* C from the first implementation, because:
 - register-hoisted `queue`/`nbits` eliminate the memory round-trips that
   plague GCC due to the aliasing conservatism;
 - the drain loop is unrolled to two write sites with no backward branch;
 - LLVM generates `cmp+adc` matching GCC's branchless 13/14-bit select.
+
+After the C `__restrict__` patch (§10), C decode overtook Rust.  The outer
+loop restructuring described in §9 restored Rust's lead.
+
+---
+
+## 9. Rust decode loop restructuring
+
+After the C `__restrict__` patch (§10), C decode jumped to ~1342 MiB/s while
+Rust unchecked stalled at ~1033 MiB/s (~23% deficit).  Disassembly comparison
+revealed the root cause.
+
+**Original Rust loop (before fix):**
+
+```
+loop:
+  fetch byte → dectab lookup → skip if 91
+  check val sentinel → store d0, continue
+  OR: compute v, emit 1-2 bytes, jump back to loop top
+```
+
+One backward branch per pair of input chars.  LLVM's `val == u32::MAX`
+sentinel check (`cmpl $-1`) added an extra branch inside the loop.
+
+**GCC's loop (C reference, after `__restrict__`):**
+
+GCC unrolls the outer loop around the emit block: after writing bytes it
+immediately fetches the *next* input byte inline (`.L29`/`.L51`/`.L30`
+in the disassembly), avoiding the backward jump to the loop top in the
+common case.  Effectively two separate skip-loops — one for d0, one for
+d1 — with the emit block between them.
+
+**Fix:** rewrote `decode_unchecked` as an explicit `loop` containing two
+separate inner `loop` blocks that scan for d0 and d1 respectively, with
+the emit block between them.  LLVM now generates the same two-scanner
+layout as GCC:
+
+```asm
+.LBB0_2:   ; scan for d0 — skip non-alphabet
+  cmpq %rsi, %rdi / je .LBB0_9
+  movzbl (%rdi), %r10d / incq %rdi
+  movzbl (%r10,%r8), %r10d
+  cmpl $91, %r10d / je .LBB0_2
+.LBB0_4:   ; scan for d1 — skip non-alphabet
+  cmpq %rsi, %rdi / je .LBB0_8
+  movzbl (%rdi), %r11d / incq %rdi
+  movzbl (%r11,%r8), %r11d
+  cmpl $91, %r11d / je .LBB0_4
+  ; emit block: adc/lea for nbits, two write sites, back to .LBB0_1
+```
+
+**Result:** Rust decode unchecked: ~1033 MiB/s → **~1236 MiB/s** (+20%),
+now **~10% ahead of C** (~1122 MiB/s) after the C decode was also
+restructured (§11).
+
+The `val` sentinel and its branch are also eliminated — `d0` is carried as
+a local between the two scanner loops, never stored to memory.
+
+---
+
+## 11. C decode two-scanner restructuring
+
+After observing that the Rust two-scanner loop (§9) beat C by ~18%, the same
+structural change was applied to `basE91_decode` in `src/base91.c`.
+
+**Change:** replaced the single `while (len--)` loop with two nested `do/while`
+skip loops — one scanning for `d0`, one for `d1` — with the emit block between
+them.  `val` is retained in `struct basE91` for ABI compatibility (streaming
+callers may split input across calls), but is used only at function entry/exit
+to carry a pending first char across chunk boundaries, never in the hot path.
+
+**Result at GCC -O2:**
+
+| | Before (old loop) | After (two-scanner) |
+|---|---|---|
+| C decode | ~1042 MiB/s | **~1122 MiB/s** (+7.7%) |
+
+Rust unchecked decode (~1236 MiB/s) still led C by ~10%.  The remaining
+gap was GCC register allocation: GCC re-loaded `dectab@GOTPCREL` inside the
+scan loops under some conditions, while LLVM hoisted it cleanly (see §12).
+
+**With Clang -O3 (after switch in §12):**
+
+| | Rust unchecked | C (Clang -O3, two-scanner) |
+|---|---|---|
+| Encode | ~1044 MiB/s | ~630 MiB/s |
+| Decode | ~1240 MiB/s | **~1229 MiB/s** (tied) |
+
+C decode ties Rust under Clang.  C encode collapses under Clang — see §12.
+
+---
+
+## 12. Clang switch: decode win, encode loss
+
+### 12.1 Motivation
+
+After the C two-scanner restructuring (§11), GCC -O2 C decode (~1122 MiB/s)
+still trailed Rust decode (~1236 MiB/s) by ~10%.  The residual gap was traced
+to GCC's register allocator: under `-O2` with `goto`-based control flow, GCC
+reloads `dectab@GOTPCREL` inside the scan loops (GOT indirection for the
+global table), while LLVM hoists the pointer into a register regardless of
+`goto` structure.
+
+**Making `enctab`/`dectab` `static`** eliminates the GOT indirection entirely
+(file-local → RIP-relative addressing).  This partially helps GCC but does not
+fully close the register-allocation gap.
+
+**Switching to Clang** (`clang -O3`) was chosen to get LLVM's superior register
+allocation for the C source without modifying the algorithm.
+
+### 12.2 Decode result
+
+Clang `-O3` + static tables + two-scanner: **C decode ~1209 MiB/s** (+7.8%
+over GCC -O2).  Rust unchecked decode (~1240 MiB/s) and C are now tied to
+within noise.
+
+### 12.3 Encode regression under Clang (before fix)
+
+Initial Clang `-O3` run: C encode **collapsed from ~970 MiB/s (GCC -O2) to
+~625 MiB/s** (-36%).  Disassembly revealed the cause: Clang merges the two
+13/14-bit encode arms into a single block using `setae`/`cmovae` +
+variable-count `shr cl`:
+
+```asm
+setae  r15b           ; r15 = (val13 > 88) ? 1 : 0
+cmovae r14d, ecx      ; select val13 or val14
+mov    cl, 0xe
+sub    cl, r15b       ; shift count = 14 or 13 — variable!
+shr    r10, cl        ; 3-cycle latency, data dep through flags
+```
+
+This is precisely the pattern Rust had and fixed (§8.3) by duplicating the
+two `output.push()` calls into each arm.  The original C source had a single
+shared write block after both branches, which Clang merges into one path.
+
+### 12.4 Fix: duplicate writes per arm
+
+Applied the same structural fix as §8.3 to `basE91_encode` in `src/base91.c`:
+moved the two `ob[n]` / `ob[n+1]` writes into each arm, with `n += 2` after
+the `if/else`.  Clang now generates:
+
+```asm
+cmp    r14d, 0x59
+jae    .L13bit         ; well-predicted branch
+; 14-bit arm: shr r9, 0xe (immediate)  → ob writes → n+=2
+.L13bit:
+; 13-bit arm: shr r9, 0xd (immediate)  → ob writes → n+=2
+```
+
+**Result:**
+
+| Metric | GCC -O2 | Clang -O3 (before) | Clang -O3 (after fix) |
+|---|---|---|---|
+| C encode | ~970 MiB/s | ~625 MiB/s | **~1042 MiB/s** (+7% over GCC) |
+| C decode | ~1122 MiB/s | ~1209 MiB/s | **~1181 MiB/s** |
+
+Encode now ties Rust unchecked (~1041 MiB/s).  Decode is ~5% below Rust
+(~1181 vs ~1239 MiB/s) — the gap is LLVM register allocation in the decode
+scan loops, not the encode fix.
+
+---
+
+## 13. C `__restrict__` patch (post-Rust-port)
+
+After observing that Rust's register hoisting was the key encode/decode win
+over unpatched C, the same optimization was applied to `src/base91.c`:
+
+- `__restrict__` added to the `b`, `i`, and `o` parameters of
+  `basE91_encode` and `basE91_decode`, telling GCC that the state struct
+  `b` cannot alias the input or output buffers.
+- `queue`, `nbits`, and `val` hoisted to local variables at function entry
+  and written back to `b` on exit — the same pattern the Rust compiler
+  had applied automatically.
+
+**Effect on encode:** C encode went from ~645 MiB/s to ~1010 MiB/s (+57%),
+now edging out Rust unchecked (~949 MiB/s).  The remaining gap is attributable
+to Rust's `cmovae`/`setae` sequence for the 13/14-bit select vs GCC's
+well-predicted branch (see §7).
+
+**Effect on decode:** C decode went from ~528 MiB/s to ~1342 MiB/s (+154%),
+now leading Rust unchecked (~1033 MiB/s) by ~30%.  The structural advantage
+comes from GCC's drain loop (backward branch + direct memory writes) vs
+LLVM's restructuring around Vec capacity checks — even in the unchecked path,
+LLVM's drain has slightly more overhead.
+
+---
+
+## 14. Rust safe: `spare_capacity_mut` + `set_len`
+
+**Problem:** `Encoder::encode` and `Decoder::decode` used `Vec::push` for
+output, which caused a ~60% throughput penalty vs the unchecked path.
+
+`Vec::push` inlines to:
+
+```rust
+if self.len == self.buf.capacity() { self.buf.grow_one(); }
+unsafe { ptr.add(self.len).write(val); }
+self.len += 1;
+```
+
+After `grow_one()` (the slow reallocation path), `ptr` and `cap` may have
+changed.  LLVM cannot hoist the capacity check or keep `ptr` in a register
+because it cannot prove `grow_one` won't run — even when the Vec was
+pre-reserved before the loop.  Result: `ptr`, `cap`, and `len` are all
+spilled to the stack, reloaded after each push.
+
+**Fix:** reserve once, then write directly into `spare_capacity_mut()`:
+
+```rust
+output.reserve(crate::encode_size_hint(input.len()));
+let spare = output.spare_capacity_mut();
+// ... hot loop writes spare[n].write(...) ...
+unsafe { output.set_len(output.len() + n) };
+```
+
+`spare_capacity_mut()` returns a `&mut [MaybeUninit<u8>]` with a fixed
+length for the whole call.  LLVM sees a plain slice: `ptr` stays in a
+register, no reallocation calls in the hot path, no per-element capacity
+check.  The duplicate-writes-per-arm fix (§12.4) was also applied to the
+encode path, giving LLVM immediate-count shifts.
+
+The only `unsafe` is `set_len`, which is sound because the loop writes
+exactly `n` bytes into `spare[0..n]` before calling it.  The public
+`encode`/`decode` API remains safe (no `unsafe fn`).
+
+**Result:**
+
+| | Before (`Vec::push`) | After (`spare_capacity_mut`) |
+|---|---|---|
+| Rust safe encode | ~494 MiB/s | **~919 MiB/s** (+86%) |
+| Rust safe decode | ~748 MiB/s | **~972 MiB/s** (+30%) |
+
+Safe is now ~88–78% of unchecked.  The residual gap is the bounds check on
+`spare[n]` (LLVM cannot prove `n < spare.len()` without profiling) and the
+`reserve` call overhead amortised over the input.

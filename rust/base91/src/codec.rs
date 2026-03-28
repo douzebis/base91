@@ -77,12 +77,19 @@ impl Encoder {
     /// Returns the number of bytes written.
     #[inline]
     pub fn encode(&mut self, input: &[u8], output: &mut Vec<u8>) -> usize {
+        // Reserve worst-case space up front so the hot loop never reallocates.
+        // Vec::push reloads ptr/cap/len from memory after every call because
+        // grow_one (the slow path) may move the allocation — LLVM cannot hoist
+        // the capacity check.  Writing into spare_capacity_mut() instead gives
+        // LLVM a fixed-length slice: ptr stays in a register, no capacity
+        // checks inside the loop.
+        output.reserve(crate::encode_size_hint(input.len()));
+        let spare = output.spare_capacity_mut();
+
         // Hoist state to locals so LLVM can keep them in registers.
-        // GCC cannot do this for the C version because it cannot prove
-        // the output buffer does not alias the state struct.
         let mut queue = self.queue;
         let mut nbits = self.nbits;
-        let before = output.len();
+        let mut n: usize = 0;
 
         for &byte in input {
             queue |= (byte as u32) << nbits;
@@ -92,23 +99,32 @@ impl Encoder {
                 if val > 88 {
                     queue >>= 13;
                     nbits -= 13;
+                    // Duplicate writes per arm: keeps each path independent so
+                    // LLVM emits immediate-count shifts instead of setae+shr cl.
+                    let q = val / 91;
+                    let r = val - q * 91;
+                    spare[n].write(ENCTAB[r as usize]);
+                    spare[n + 1].write(ENCTAB[q as usize]);
                 } else {
                     val = queue & 0x3fff; // take 14 bits
                     queue >>= 14;
                     nbits -= 14;
+                    let q = val / 91;
+                    let r = val - q * 91;
+                    spare[n].write(ENCTAB[r as usize]);
+                    spare[n + 1].write(ENCTAB[q as usize]);
                 }
-                // Single division: one multiply-shift instead of two.
-                // LLVM will emit imul+shr for both / and %; verify in asm.
-                let q = val / 91;
-                let r = val - q * 91;
-                output.push(ENCTAB[r as usize]);
-                output.push(ENCTAB[q as usize]);
+                n += 2;
             }
         }
 
+        // Safety: we wrote exactly n bytes into spare_capacity_mut(), which
+        // has at least encode_size_hint(input.len()) slots — always ≥ n.
+        unsafe { output.set_len(output.len() + n) };
+
         self.queue = queue;
         self.nbits = nbits;
-        output.len() - before
+        n
     }
 
     /// Flush remaining bits and return the number of bytes written (0–2).
@@ -173,11 +189,15 @@ impl Decoder {
     /// Returns the number of bytes written.
     #[inline]
     pub fn decode(&mut self, input: &[u8], output: &mut Vec<u8>) -> usize {
-        // Hoist state to locals for the same reason as Encoder::encode.
+        // Same spare_capacity_mut strategy as Encoder::encode — see that
+        // method for the rationale.
+        output.reserve(crate::decode_size_hint(input.len()));
+        let spare = output.spare_capacity_mut();
+
         let mut queue = self.queue;
         let mut nbits = self.nbits;
         let mut val = self.val;
-        let before = output.len();
+        let mut n: usize = 0;
 
         for &byte in input {
             let d = DECTAB[byte as usize] as u32;
@@ -193,27 +213,30 @@ impl Decoder {
 
                 queue |= v << nbits;
                 // Branchless 13/14-bit selection.
-                // Mirrors the C: (b->val & 8191) > 88 ? 13 : 14
-                // Written so LLVM can emit cmp+adc (verify in asm).
                 nbits += if v & 0x1fff > 88 { 13 } else { 14 };
 
                 // Drain: at most 2 bytes (unrolled, no loop).
-                // After the above, nbits is in [13, 27]; always ≥ 8.
-                output.push(queue as u8);
+                spare[n].write(queue as u8);
+                n += 1;
                 queue >>= 8;
                 nbits -= 8;
                 if nbits >= 8 {
-                    output.push(queue as u8);
+                    spare[n].write(queue as u8);
+                    n += 1;
                     queue >>= 8;
                     nbits -= 8;
                 }
             }
         }
 
+        // Safety: we wrote exactly n bytes into spare_capacity_mut(), which
+        // has at least decode_size_hint(input.len()) slots — always ≥ n.
+        unsafe { output.set_len(output.len() + n) };
+
         self.queue = queue;
         self.nbits = nbits;
         self.val = val;
-        output.len() - before
+        n
     }
 
     /// Flush any remaining partial value (0 or 1 byte).
@@ -306,45 +329,65 @@ pub(crate) unsafe fn encode_unchecked(input: &[u8], output: *mut u8) -> usize {
 pub(crate) unsafe fn decode_unchecked(input: &[u8], output: *mut u8) -> usize {
     let mut queue: u32 = 0;
     let mut nbits: u32 = 0;
-    let mut val: u32 = u32::MAX;
     let mut n: usize = 0;
+    let mut ptr = input.as_ptr();
+    let end = unsafe { ptr.add(input.len()) };
 
-    for &byte in input {
-        // Safety: byte is u8, so always a valid index into DECTAB[256].
-        let d = unsafe { *DECTAB.get_unchecked(byte as usize) } as u32;
-        if d == 91 {
-            continue;
+    // Outer loop: find first char of a pair (skip non-alphabet).
+    // After emitting bytes, the inner inline block fetches the next char
+    // directly — matching GCC's unrolled decode loop layout.
+    loop {
+        // --- scan for first char of pair ---
+        let d0 = loop {
+            if ptr == end {
+                return n;
+            }
+            let b = unsafe { *ptr };
+            ptr = unsafe { ptr.add(1) };
+            let d = unsafe { *DECTAB.get_unchecked(b as usize) } as u32;
+            if d != 91 {
+                break d;
+            }
+        };
+
+        // --- scan for second char of pair ---
+        let d1 = loop {
+            if ptr == end {
+                // Flush pending first char (partial value).
+                unsafe {
+                    output.add(n).write((queue | (d0 << nbits)) as u8);
+                }
+                return n + 1;
+            }
+            let b = unsafe { *ptr };
+            ptr = unsafe { ptr.add(1) };
+            let d = unsafe { *DECTAB.get_unchecked(b as usize) } as u32;
+            if d != 91 {
+                break d;
+            }
+        };
+
+        // --- emit bytes ---
+        let v = d0 + d1 * 91;
+        queue |= v << nbits;
+        // Branchless 13/14-bit select: mirrors GCC's cmp+adc pattern.
+        // (v & 0x1fff > 88) is false ~1.1% of the time.
+        nbits += if v & 0x1fff > 88 { 13 } else { 14 };
+        unsafe {
+            output.add(n).write(queue as u8);
         }
-        if val == u32::MAX {
-            val = d;
-        } else {
-            let v = val + d * 91;
-            val = u32::MAX;
-            queue |= v << nbits;
-            nbits += if v & 0x1fff > 88 { 13 } else { 14 };
+        n += 1;
+        queue >>= 8;
+        nbits -= 8;
+        if nbits >= 8 {
             unsafe {
                 output.add(n).write(queue as u8);
             }
             n += 1;
             queue >>= 8;
             nbits -= 8;
-            if nbits >= 8 {
-                unsafe {
-                    output.add(n).write(queue as u8);
-                }
-                n += 1;
-                queue >>= 8;
-                nbits -= 8;
-            }
         }
     }
-    if val != u32::MAX {
-        unsafe {
-            output.add(n).write((queue | (val << nbits)) as u8);
-        }
-        n += 1;
-    }
-    n
 }
 
 // ---------------------------------------------------------------------------
