@@ -12,18 +12,23 @@ use rand::RngCore;
 
 #[cfg(feature = "c-compat-tests")]
 mod c_ref {
-    use base91::c_api::basE91 as State;
+    #[repr(C)]
+    pub struct BasE91State {
+        pub queue: u64,
+        pub nbits: u32,
+        pub val: i32,
+    }
 
     extern "C" {
-        pub fn c_basE91_init(b: *mut State);
-        pub fn c_basE91_encode(b: *mut State, i: *const u8, len: usize, o: *mut u8) -> usize;
-        pub fn c_basE91_encode_end(b: *mut State, o: *mut u8) -> usize;
-        pub fn c_basE91_decode(b: *mut State, i: *const u8, len: usize, o: *mut u8) -> usize;
-        pub fn c_basE91_decode_end(b: *mut State, o: *mut u8) -> usize;
+        pub fn c_basE91_init(b: *mut BasE91State);
+        pub fn c_basE91_encode(b: *mut BasE91State, i: *const u8, len: usize, o: *mut u8) -> usize;
+        pub fn c_basE91_encode_end(b: *mut BasE91State, o: *mut u8) -> usize;
+        pub fn c_basE91_decode(b: *mut BasE91State, i: *const u8, len: usize, o: *mut u8) -> usize;
+        pub fn c_basE91_decode_end(b: *mut BasE91State, o: *mut u8) -> usize;
     }
 
     pub unsafe fn encode(input: &[u8], output: *mut u8) -> usize {
-        let mut state = std::mem::MaybeUninit::<State>::uninit();
+        let mut state = std::mem::MaybeUninit::<BasE91State>::uninit();
         c_basE91_init(state.as_mut_ptr());
         let mut state = state.assume_init();
         let n = c_basE91_encode(&mut state, input.as_ptr(), input.len(), output);
@@ -32,45 +37,13 @@ mod c_ref {
     }
 
     pub unsafe fn decode(input: &[u8], output: *mut u8) -> usize {
-        let mut state = std::mem::MaybeUninit::<State>::uninit();
+        let mut state = std::mem::MaybeUninit::<BasE91State>::uninit();
         c_basE91_init(state.as_mut_ptr());
         let mut state = state.assume_init();
         let n = c_basE91_decode(&mut state, input.as_ptr(), input.len(), output);
         let m = c_basE91_decode_end(&mut state, output.add(n));
         n + m
     }
-}
-
-// ---------------------------------------------------------------------------
-// Rust C API
-// ---------------------------------------------------------------------------
-
-unsafe fn rust_c_api_encode(input: &[u8], output: *mut u8) -> usize {
-    let mut state = std::mem::MaybeUninit::<base91::c_api::basE91>::uninit();
-    base91::c_api::basE91_init(state.as_mut_ptr());
-    let mut state = state.assume_init();
-    let n = base91::c_api::basE91_encode(
-        &mut state,
-        input.as_ptr() as *const _,
-        input.len(),
-        output as *mut _,
-    );
-    let m = base91::c_api::basE91_encode_end(&mut state, output.add(n) as *mut _);
-    n + m
-}
-
-unsafe fn rust_c_api_decode(input: &[u8], output: *mut u8) -> usize {
-    let mut state = std::mem::MaybeUninit::<base91::c_api::basE91>::uninit();
-    base91::c_api::basE91_init(state.as_mut_ptr());
-    let mut state = state.assume_init();
-    let n = base91::c_api::basE91_decode(
-        &mut state,
-        input.as_ptr() as *const _,
-        input.len(),
-        output as *mut _,
-    );
-    let m = base91::c_api::basE91_decode_end(&mut state, output.add(n) as *mut _);
-    n + m
 }
 
 // ---------------------------------------------------------------------------
@@ -100,13 +73,9 @@ fn bench_encode(c: &mut Criterion) {
         },
     );
 
-    g.bench_with_input(
-        BenchmarkId::new("rust_c_api", "1mib"),
-        &input,
-        |b, input| {
-            b.iter(|| unsafe { rust_c_api_encode(input, enc_buf.as_mut_ptr()) });
-        },
-    );
+    g.bench_with_input(BenchmarkId::new("rust_safe", "1mib"), &input, |b, input| {
+        b.iter(|| base91::encode(input));
+    });
 
     #[cfg(feature = "c-compat-tests")]
     g.bench_with_input(
@@ -142,11 +111,9 @@ fn bench_decode(c: &mut Criterion) {
     );
 
     g.bench_with_input(
-        BenchmarkId::new("rust_c_api", "1mib"),
+        BenchmarkId::new("rust_safe", "1mib"),
         &encoded,
-        |b, encoded| {
-            b.iter(|| unsafe { rust_c_api_decode(encoded, dec_buf.as_mut_ptr()) });
-        },
+        |b, encoded| b.iter(|| base91::decode(encoded)),
     );
 
     #[cfg(feature = "c-compat-tests")]

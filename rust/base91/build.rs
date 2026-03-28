@@ -12,7 +12,7 @@ fn main() {
     // the C reference and the Rust implementation side-by-side without a name
     // clash.
     //
-    // Requires: gcc (or compatible CC), objcopy, ar on PATH.
+    // Requires: clang, objcopy, ar on PATH.
     // -----------------------------------------------------------------------
     #[cfg(feature = "c-compat-tests")]
     compile_c_reference();
@@ -28,15 +28,21 @@ fn compile_c_reference() {
     println!("cargo:rerun-if-changed=../../src/base91.h");
 
     // 1. Compile to an object file via the cc crate's compiler detection.
-    let compiler = cc::Build::new()
-        .file("../../src/base91.c")
-        .opt_level(2)
-        .flag("-fno-plt")
-        .get_compiler();
-
-    std::process::Command::new(compiler.path())
-        .args(compiler.args())
-        .args(["-c", "../../src/base91.c", "-o", &obj_path])
+    //    Explicitly pass -O2 and -fno-plt so they are not silently dropped
+    //    (get_compiler() returns only the compiler path + env-detected flags;
+    //    opt_level/flag settings on the builder are ignored by get_compiler).
+    // Use clang explicitly: LLVM backend produces better code than GCC for
+    // this algorithm (better register allocation, no GOT-reload regression
+    // at -O3, same two-scanner loop quality as rustc).
+    std::process::Command::new("clang")
+        .args([
+            "-O3",
+            "-fno-plt",
+            "-c",
+            "../../src/base91.c",
+            "-o",
+            &obj_path,
+        ])
         .status()
         .expect("C compilation failed");
 

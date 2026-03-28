@@ -7,7 +7,7 @@
 
 #include "base91.h"
 
-const unsigned char enctab[91] = {
+static const unsigned char enctab[91] = {
 	'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
 	'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
 	'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
@@ -16,7 +16,7 @@ const unsigned char enctab[91] = {
 	'%', '&', '(', ')', '*', '+', ',', '.', '/', ':', ';', '<', '=',
 	'>', '?', '@', '[', ']', '^', '_', '`', '{', '|', '}', '~', '"'
 };
-const unsigned char dectab[256] = {
+static const unsigned char dectab[256] = {
 	91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91,
 	91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91, 91,
 	91, 62, 90, 63, 64, 65, 66, 91, 67, 68, 69, 70, 71, 91, 72, 73,
@@ -58,16 +58,22 @@ size_t basE91_encode(struct basE91 * __restrict__ b,
 		if (nbits > 13) {	/* enough bits in queue */
 			unsigned int val = queue & 8191;
 
+			/* Duplicate writes per arm so Clang keeps each path
+			 * separate and uses immediate-count shifts instead of
+			 * merging both arms into a variable-count shr cl. */
 			if (val > 88) {
 				queue >>= 13;
 				nbits -= 13;
+				ob[n] = enctab[val % 91];
+				ob[n + 1] = enctab[val / 91];
 			} else {	/* we can take 14 bits */
 				val = queue & 16383;
 				queue >>= 14;
 				nbits -= 14;
+				ob[n] = enctab[val % 91];
+				ob[n + 1] = enctab[val / 91];
 			}
-			ob[n++] = enctab[val % 91];
-			ob[n++] = enctab[val / 91];
+			n += 2;
 		}
 	}
 
@@ -100,38 +106,53 @@ size_t basE91_decode(struct basE91 * __restrict__ b,
                      void * __restrict__ o)
 {
 	const unsigned char *ib = i;
+	const unsigned char *ie = ib + len;
 	unsigned char *ob = o;
 	size_t n = 0;
 	unsigned long queue = b->queue;
 	unsigned int nbits = b->nbits;
-	int val = b->val;
-	unsigned int d;
+	unsigned int d0, d1;
 
-	while (len--) {
-		d = dectab[*ib++];
-		if (d == 91)
-			continue;	/* ignore non-alphabet chars */
-		if (val == -1)
-			val = d;	/* start next value */
-		else {
-			unsigned int v = val + d * 91;
-			val = -1;
+	/* Resume a pending first char from a previous call. */
+	if (b->val != -1) {
+		d0 = (unsigned int)b->val;
+		b->val = -1;
+		goto have_d0;
+	}
+
+	for (;;) {
+		/* --- scan for d0 --- */
+		do {
+			if (ib == ie) goto done;
+			d0 = dectab[*ib++];
+		} while (d0 == 91);
+
+have_d0:
+		/* --- scan for d1 --- */
+		do {
+			if (ib == ie) { b->val = (int)d0; goto done; }
+			d1 = dectab[*ib++];
+		} while (d1 == 91);
+
+		/* --- emit --- */
+		{
+			unsigned int v = d0 + d1 * 91;
 			queue |= (unsigned long)v << nbits;
 			nbits += (v & 8191) > 88 ? 13 : 14;
-			ob[n++] = queue;
+			ob[n++] = (unsigned char)queue;
 			queue >>= 8;
 			nbits -= 8;
 			if (nbits >= 8) {
-				ob[n++] = queue;
+				ob[n++] = (unsigned char)queue;
 				queue >>= 8;
 				nbits -= 8;
 			}
 		}
 	}
 
+done:
 	b->queue = queue;
 	b->nbits = nbits;
-	b->val = val;
 	return n;
 }
 

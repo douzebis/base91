@@ -16,6 +16,7 @@ categories  = ["encoding"]
 
 [lib]
 name = "base91"
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "post_build"
