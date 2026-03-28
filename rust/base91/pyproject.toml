@@ -11,7 +11,7 @@ name            = "pybase91"
 version         = "0.2.0"
 description     = "basE91 binary-to-text encoding — Python extension (Rust/PyO3)"
 license         = { text = "MIT" }
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 
 [tool.maturin]
 features      = ["python"]
