@@ -173,6 +173,44 @@ let
   };
 
   # ---------------------------------------------------------------------------
+  # GO LIBRARY — pure Go, zero cgo
+  # ---------------------------------------------------------------------------
+  goTests = pkgs.stdenv.mkDerivation {
+    pname   = "base91-go-tests";
+    version = "0.2.0";
+
+    # Include go/ sources and the shared test fixtures from the Rust crate.
+    src = pkgs.lib.cleanSourceWith {
+      src    = pkgs.lib.cleanSource ./.;
+      filter = path: type:
+        builtins.match ".*/go(/.*)?$" path != null
+        || builtins.match ".*/rust/base91/tests/fixtures(/.*)?$" path != null;
+    };
+
+    nativeBuildInputs = [ pkgs.go ];
+
+    # Point the Go module cache at a writable directory inside the sandbox.
+    GOPATH  = "/tmp/gopath";
+    GOFLAGS = "-mod=mod";
+
+    buildPhase = ''
+      cd go
+      go test ./...
+    '';
+
+    installPhase = ''
+      touch $out
+    '';
+
+    meta = with pkgs.lib; {
+      description = "basE91 Go library tests";
+      homepage    = "https://github.com/douzebis/base91";
+      license     = licenses.mit;
+      platforms   = platforms.unix;
+    };
+  };
+
+  # ---------------------------------------------------------------------------
   # PYTHON EXTENSION — PyO3 bindings via maturin
   #
   # maturin drives the full cargo build and packages the .so as a wheel.
@@ -224,6 +262,8 @@ let
       rustc
       rustfmt
       clippy
+      # Go toolchain
+      go
       # C toolchain — only needed to run benches with --features c-compat-tests
       gcc
       binutils        # objcopy + ar (build.rs symbol rename for c-compat-tests)
@@ -254,6 +294,7 @@ let
       echo "Development environment ready."
       echo "  Rust:  $(cargo --version)"
       echo "  rustc: $(rustc --version)"
+      echo "  Go:    $(go version)"
 
       eval "$old_opts"
     '';
@@ -270,4 +311,5 @@ in
   rust-fmt      = rustFmt;
   rust-clippy   = rustClippy;
   rust-tests    = rustTests;
+  go-tests      = goTests;
 }
