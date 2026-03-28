@@ -197,6 +197,7 @@ let
 
     buildPhase = ''
       cd go
+      go vet ./...
       go test ./...
     '';
 
