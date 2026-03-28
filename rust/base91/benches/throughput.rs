@@ -5,6 +5,9 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::RngCore;
 
+// competitor crate (base91 v0.1.0 by dnsl48)
+use base91_dnsl48 as base91_other;
+
 // ---------------------------------------------------------------------------
 // C reference FFI — only available with --features c-compat-tests
 // (build.rs compiles src/base91.c and renames symbols to c_basE91_*)
@@ -77,6 +80,14 @@ fn bench_encode(c: &mut Criterion) {
         b.iter(|| base91::encode(input));
     });
 
+    g.bench_with_input(
+        BenchmarkId::new("base91_dnsl48", "1mib"),
+        &input,
+        |b, input| {
+            b.iter(|| base91_other::slice_encode(input));
+        },
+    );
+
     #[cfg(feature = "c-compat-tests")]
     g.bench_with_input(
         BenchmarkId::new("c_reference", "1mib"),
@@ -114,6 +125,14 @@ fn bench_decode(c: &mut Criterion) {
         BenchmarkId::new("rust_safe", "1mib"),
         &encoded,
         |b, encoded| b.iter(|| base91::decode(encoded)),
+    );
+
+    g.bench_with_input(
+        BenchmarkId::new("base91_dnsl48", "1mib"),
+        &encoded,
+        |b, encoded| {
+            b.iter(|| base91_other::slice_decode(encoded));
+        },
     );
 
     #[cfg(feature = "c-compat-tests")]
