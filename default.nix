@@ -115,6 +115,11 @@ let
       else
         echo "WARNING: build.rs OUT_DIR not found — man page and completions not installed" >&2
       fi
+
+      # Man section 3 (C API) — committed source files, installed directly
+      for f in ${./rust/base91-cli/man/man3}/*.3; do
+        install -Dm444 "$f" $out/share/man/man3/$(basename "$f")
+      done
     '';
 
     meta = with pkgs.lib; {

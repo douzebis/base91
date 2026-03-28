@@ -6,6 +6,7 @@
 name        = "base91"
 version     = "0.2.0"
 edition     = "2021"
+rust-version = "1.74"
 description = "basE91 binary-to-text encoding — fast, no_std-compatible Rust implementation"
 license     = "MIT"
 repository  = "https://github.com/douzebis/base91"
