@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name        = "base91"
+version     = "0.2.0"
+edition     = "2021"
+description = "basE91 binary-to-text encoding — fast, no_std-compatible Rust implementation"
+license     = "MIT"
+repository  = "https://github.com/douzebis/base91"
+readme      = "README.md"
+keywords    = ["base91", "encoding", "binary-to-text", "codec"]
+categories  = ["encoding"]
+
+[lib]
+name       = "base91"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "post_build"
+path = "src/bin/post_build.rs"
+required-features = ["python"]
+
+[[bench]]
+name              = "throughput"
+harness           = false
+required-features = ["c-compat-tests"]
+
+[features]
+default        = ["std", "io"]
+std            = []
+io             = ["std"]
+python         = ["pyo3", "pyo3-stub-gen", "pyo3-stub-gen-derive"]
+# Enables the C reference benchmarks and c-compat unit tests.
+# Requires gcc, objcopy, and ar on PATH, and src/base91.{c,h} two levels up.
+# Never enabled by default; not part of the published crate.
+c-compat-tests = ["dep:cc"]
+
+[dependencies]
+pyo3                 = { version = "0.26", features = ["extension-module"], optional = true }
+pyo3-stub-gen        = { version = "0.17", optional = true }
+pyo3-stub-gen-derive = { version = "0.17", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+rand      = "0.8"
+sha2      = "0.10"
+
+[build-dependencies]
+cc = { version = "1", optional = true }

@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[workspace]
+members  = ["base91", "base91-cli"]
+resolver = "2"

@@ -3,3 +3,9 @@
 # SPDX-License-Identifier: MIT
 
 /result
+
+# Rust build artifacts
+rust/target/
+
+# Generated files (produced by `cargo run --bin post_build --features python`)
+rust/base91/pybase91.pyi

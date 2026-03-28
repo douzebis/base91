@@ -13,3 +13,13 @@ SPDX-License-Identifier = "BSD-3-Clause"
 path = "./*"
 SPDX-FileCopyrightText = "2025 Frederic Ruget <fred@atlant.is>"
 SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["rust/Cargo.lock", "rust/rust_out", "rust/target/**"]
+SPDX-FileCopyrightText = "2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "rust/base91/tests/fixtures/**"
+SPDX-FileCopyrightText = "2006 Joachim Henke"
+SPDX-License-Identifier = "BSD-3-Clause"
