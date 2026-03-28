@@ -98,6 +98,7 @@ implementation at <http://base91.sourceforge.net/>.
 Original C implementation by Joachim Henke.
 Source preserved unchanged in `src/`.
 
-[Unreleased]: https://github.com/douzebis/base91/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/douzebis/base91/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/douzebis/base91/releases/tag/v0.2.1
 [0.2.0]: https://github.com/douzebis/base91/releases/tag/v0.2.0
 [0.1.0]: http://base91.sourceforge.net/
