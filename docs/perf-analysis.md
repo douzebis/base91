@@ -452,16 +452,19 @@ second byte — exactly the unrolled pattern specified.
 Criterion 100-sample run.  Throughput measured on input bytes for encode,
 encoded bytes for decode.
 
+Note: this CPU's boost clock is variable (~900–1050 MiB/s range across runs
+depending on sustained load and power state); relative comparisons are stable
+even when absolute numbers shift by ~10%.
+
 | Implementation | Encode | Decode |
 |---|---|---|
-| Rust unchecked | **~1.016 GiB/s (~1041 MiB/s)** | **~1.210 GiB/s (~1239 MiB/s)** |
-| C (clang -O3, `__restrict__`, static tables, dup writes) | **~1.017 GiB/s (~1042 MiB/s)** | ~1.153 GiB/s (~1181 MiB/s) |
-| Rust safe (`spare_capacity_mut`) | ~919 MiB/s | ~972 MiB/s |
+| Rust unchecked | ~915 MiB/s | ~1215 MiB/s |
+| C (clang -O3, `__restrict__`, static tables, dup writes) | ~1013 MiB/s | ~1165 MiB/s |
+| Rust safe (`spare_capacity_mut`) | ~881 MiB/s | ~989 MiB/s |
 
-**Encode is tied** (~1.017 GiB/s each) after duplicating the write block into
-each encode arm (§12.3, §12.4).  **Decode: Rust leads C by ~5%**: the remaining
-gap is Clang's register allocation for the decode scan loops vs LLVM in rustc.
-**Rust safe** now at ~90% of unchecked after switching from `Vec::push` to
+**Encode: C and Rust unchecked are within ~10% of each other**, varying run to
+run with boost clock.  **Decode: Rust unchecked leads C by ~4%**.
+**Rust safe** at ~96–81% of unchecked after switching from `Vec::push` to
 `spare_capacity_mut` + `set_len` (§14).
 
 ### 8.2 All-language comparison (1 MiB random input, same machine)
@@ -479,11 +482,11 @@ Methodology:
 
 | Language | Encode | Decode | Notes |
 |---|---|---|---|
-| Rust unchecked | **~1041 MiB/s** | **~1239 MiB/s** | raw pointer output |
-| C (clang -O3, `__restrict__`, static tables, dup writes) | **~1042 MiB/s** | ~1181 MiB/s | native, no bounds checks |
-| Rust safe (`spare_capacity_mut`) | ~919 MiB/s | ~972 MiB/s | pre-reserved, one `unsafe` |
-| Python (pybase91 PyO3) | ~566 MiB/s | ~998 MiB/s | Rust core + Python object alloc |
-| Go | 571 MiB/s | 517 MiB/s | pre-allocated slice, zero allocs |
+| C (clang -O3, `__restrict__`, static tables, dup writes) | ~1013 MiB/s | ~1165 MiB/s | native, no bounds checks |
+| Rust unchecked | ~915 MiB/s | ~1215 MiB/s | raw pointer output |
+| Rust safe (`spare_capacity_mut`) | ~881 MiB/s | ~989 MiB/s | pre-reserved, one `unsafe` |
+| Go | ~584 MiB/s | ~540 MiB/s | pre-allocated slice, zero allocs |
+| Python (pybase91 PyO3) | ~557 MiB/s | ~955 MiB/s | Rust core + Python object alloc |
 
 ### 8.3 Encode performance history (Rust)
 
