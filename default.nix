@@ -186,7 +186,7 @@ let
       src    = pkgs.lib.cleanSource ./.;
       filter = path: type:
         builtins.match ".*/go(/.*)?$" path != null
-        || builtins.match ".*/rust/base91/tests/fixtures(/.*)?$" path != null;
+        || builtins.match ".*/(rust|rust/base91|rust/base91/tests|rust/base91/tests/fixtures)(/.*)?$" path != null;
     };
 
     nativeBuildInputs = [ pkgs.go ];
