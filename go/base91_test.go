@@ -27,10 +27,20 @@ func sha256hex(data []byte) string {
 
 // fixture reads a binary test fixture from the Rust crate's fixtures directory.
 // The fixtures are shared between the Rust and Go test suites.
+//
+// The BASE91_FIXTURES_DIR environment variable overrides the default path,
+// which is useful in Nix sandboxes where runtime.Caller(0) returns the
+// compile-time source path rather than the runtime sandbox path.
 func fixture(name string) []byte {
-	_, thisFile, _, _ := runtime.Caller(0)
-	// go/base91_test.go → ../../rust/base91/tests/fixtures/<name>
-	path := filepath.Join(filepath.Dir(thisFile), "..", "rust", "base91", "tests", "fixtures", name)
+	var dir string
+	if d := os.Getenv("BASE91_FIXTURES_DIR"); d != "" {
+		dir = d
+	} else {
+		_, thisFile, _, _ := runtime.Caller(0)
+		// go/base91_test.go → ../rust/base91/tests/fixtures/<name>
+		dir = filepath.Join(filepath.Dir(thisFile), "..", "rust", "base91", "tests", "fixtures")
+	}
+	path := filepath.Join(dir, name)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		panic(fmt.Sprintf("fixture %q: %v", name, err))
