@@ -35,11 +35,11 @@ jobs:
         run: nix-build default.nix -A rust-tests
 
   test-msrv:
-    name: cargo test (MSRV 1.74)
+    name: cargo test (MSRV 1.78)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.74
+      - uses: dtolnay/rust-toolchain@1.78
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
