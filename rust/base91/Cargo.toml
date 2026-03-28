@@ -24,9 +24,8 @@ path = "src/bin/post_build.rs"
 required-features = ["python"]
 
 [[bench]]
-name              = "throughput"
-harness           = false
-required-features = ["c-compat-tests"]
+name    = "throughput"
+harness = false
 
 [features]
 default        = ["std", "io"]
@@ -44,9 +43,10 @@ pyo3-stub-gen        = { version = "0.20", optional = true }
 pyo3-stub-gen-derive = { version = "0.20", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
-rand      = "0.8"
-sha2      = "0.10"
+criterion  = { version = "0.5", features = ["html_reports"] }
+rand       = "0.8"
+sha2       = "0.10"
+base91-dnsl48 = { package = "base91", version = "0.1" }
 
 [build-dependencies]
 cc = { version = "1", optional = true }
