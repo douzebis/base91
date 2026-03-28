@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 [package]
-name        = "base91"
+name        = "base91-rs"
 version     = "0.2.0"
 edition     = "2021"
 rust-version = "1.91"
