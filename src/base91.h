@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2000-2006 Joachim Henke
+ * SPDX-FileCopyrightText: 2000-2006 Joachim Henke
  *
- * For conditions of distribution and use, see copyright notice in base91.c
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #ifndef BASE91_H
@@ -15,14 +15,18 @@ struct basE91 {
 	int val;
 };
 
-void basE91_init(struct basE91 *);
+void basE91_init(struct basE91 *b);
 
-size_t basE91_encode(struct basE91 *, const void *, size_t, void *);
+size_t basE91_encode(struct basE91 * __restrict__ b,
+                     const void * __restrict__ i, size_t len,
+                     void * __restrict__ o);
 
-size_t basE91_encode_end(struct basE91 *, void *);
+size_t basE91_encode_end(struct basE91 *b, void *o);
 
-size_t basE91_decode(struct basE91 *, const void *, size_t, void *);
+size_t basE91_decode(struct basE91 * __restrict__ b,
+                     const void * __restrict__ i, size_t len,
+                     void * __restrict__ o);
 
-size_t basE91_decode_end(struct basE91 *, void *);
+size_t basE91_decode_end(struct basE91 *b, void *o);
 
 #endif	/* base91.h */
