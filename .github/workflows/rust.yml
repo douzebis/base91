@@ -10,44 +10,29 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
-
 jobs:
-  fmt:
-    name: cargo fmt
+  ci:
+    name: fmt / clippy / test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - run: cargo fmt --check --manifest-path rust/Cargo.toml
 
-  clippy:
-    name: cargo clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
-      - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+      - uses: cachix/install-nix-action@v27
 
-  test:
-    name: cargo test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: cachix/cachix-action@v15
         with:
-          workspaces: rust
-      - run: cargo test --manifest-path rust/Cargo.toml
+          name: base91
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        continue-on-error: true
+
+      - name: cargo fmt
+        run: nix-build default.nix -A rust-fmt
+
+      - name: cargo clippy
+        run: nix-build default.nix -A rust-clippy
+
+      - name: cargo test
+        run: nix-build default.nix -A rust-tests
 
   test-msrv:
     name: cargo test (MSRV 1.74)

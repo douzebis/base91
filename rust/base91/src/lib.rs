@@ -79,7 +79,7 @@ pub use python::stub_info;
 #[inline]
 pub fn encode_size_hint(input_len: usize) -> usize {
     // ceil(input_len * 16 / 13) + 2
-    (input_len * 16 + 12) / 13 + 2
+    (input_len * 16).div_ceil(13) + 2
 }
 
 /// Conservative upper bound on the decoded length for `input_len` encoded bytes.
