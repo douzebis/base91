@@ -16,7 +16,7 @@ name = "base91"
 path = "src/main.rs"
 
 [dependencies]
-base91        = { path = "../base91", default-features = false, features = ["std", "io"] }
+base91        = { version = "0.2.0", package = "base91-rs", path = "../base91", default-features = false, features = ["std", "io"] }
 clap          = { version = "4", features = ["derive"] }
 clap_complete = "4"
 
