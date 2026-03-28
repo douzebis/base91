@@ -15,8 +15,7 @@ keywords    = ["base91", "encoding", "binary-to-text", "codec"]
 categories  = ["encoding"]
 
 [lib]
-name       = "base91"
-crate-type = ["lib", "cdylib", "staticlib"]
+name = "base91"
 
 [[bin]]
 name = "post_build"

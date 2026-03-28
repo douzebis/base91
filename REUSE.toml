@@ -4,10 +4,6 @@
 
 version = 1
 
-[[annotations]]
-path = "src/*"
-SPDX-FileCopyrightText = "2006 Joachim Henke"
-SPDX-License-Identifier = "BSD-3-Clause"
 
 [[annotations]]
 path = "./*"

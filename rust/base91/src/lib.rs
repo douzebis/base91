@@ -53,7 +53,6 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-pub mod c_api;
 mod codec;
 #[cfg(feature = "io")]
 pub mod io;
