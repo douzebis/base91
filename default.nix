@@ -197,6 +197,7 @@ let
     GOFLAGS = "-mod=mod";
 
     buildPhase = ''
+      export BASE91_FIXTURES_DIR="$PWD/rust/base91/tests/fixtures"
       cd go
       go vet ./...
       go test ./...
