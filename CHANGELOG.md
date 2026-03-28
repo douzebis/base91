@@ -17,6 +17,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.1] - 2026-03-28
+
+### Added
+
+- `README.md` for `base91-rs` crate with quick-start, API overview, and
+  performance comparison vs `base91` v0.1.0 (dnsl48).
+- Criterion benchmark now includes `base91` v0.1.0 as a comparison target.
+
+---
+
 ## [0.2.0] - 2026-03-28
 
 First Rust release.  Wire-format compatible with Joachim Henke's C reference
