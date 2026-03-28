@@ -1,106 +1,108 @@
 <!-- SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis) -->
 <!-- SPDX-License-Identifier: MIT -->
 
-# Publishing Proposals
+# Publishing checklist
 
-Three artifacts to publish, three venues.
-
----
-
-## 1. crates.io — `base91` crate
-
-**What:** The `rust/base91` library crate (pure-Rust basE91 codec, `no_std`-compatible, C API included).
-
-**Readiness checklist:**
-
-- [ ] `Cargo.toml`: confirm `description`, `repository`, `homepage`, `keywords`, `categories`, `license` are all filled (they are).
-- [ ] Write `rust/base91/README.md` — crates.io renders it as the crate homepage. Cover: quick-start, streaming API, C API, `no_std` usage, `python` feature gate.
-- [ ] Decide whether to publish the `python` feature. PyO3 pulls in a heavy optional dep tree; consider splitting it into a separate `pybase91` crate if you don't want pyo3 as an optional dep on crates.io.
-- [ ] Run `cargo publish --dry-run -p base91` to catch any packaging issues (missing files, path deps, etc.).
-- [ ] The `build.rs` C compilation (`../../src/base91.c`) uses a path that is **outside** the crate root and will be excluded from the published crate. Either:
-  - (a) Copy `src/base91.c` and `src/base91.h` into `rust/base91/c_ref/` and update the path in `build.rs`, or
-  - (b) Gate the C reference benchmarks behind a cargo feature (`c-compat-tests`) that is off by default, and only compile `base91.c` when that feature is active. Users on crates.io never need the C reference — only the Rust tests and the C-API functions, which are pure Rust.
-
-  Option (b) is cleaner: the benches that compare against the C reference simply won't build on crates.io, which is fine.
-
-**Publish command (once ready):**
-
-```sh
-cargo publish -p base91
-```
+Three registries, in dependency order: crates.io first (PyPI and nixpkgs
+depend on it being published), then PyPI, then nixpkgs.
 
 ---
 
-## 2. PyPI — `pybase91` package
+## Pre-flight (all registries)
 
-**What:** The `pybase91` Python extension (PyO3 `.so` + `.pyi` stubs), packaged as a wheel.
-
-**Build approach:** [maturin](https://github.com/PyO3/maturin) is the standard PyO3 → PyPI build tool. It handles:
-- Cross-platform wheel building (Linux `manylinux`, macOS, Windows)
-- `pyproject.toml`-based packaging
-- Automatic `.pyi` stub integration (via `pyo3-stub-gen`)
-- `pip install pybase91` / `maturin develop` workflow
-
-**Steps:**
-
-1. Replace hatchling with maturin as the build backend in `pyproject.toml`:
-   ```toml
-   [build-system]
-   requires      = ["maturin>=1.7,<2"]
-   build-backend = "maturin"
-
-   [tool.maturin]
-   features    = ["python"]
-   module-name = "pybase91.pybase91"
-   python-source = "."
-   ```
-2. Add `maturin` to the dev-shell and CI.
-3. Set up a GitHub Actions workflow using `maturin-action` to build wheels for all target triples and upload to PyPI on tag push.
-4. The `post_build` step (pyo3-stub-gen) needs to run as part of the maturin build; hook it via `maturin build --interpreter python3 -- --bin post_build --features python` or a custom `build.rs` step.
-
-**Nix integration:** The existing `base91-py` / `pybase91` derivations in `default.nix` serve for Nix users. PyPI is for the wider Python ecosystem.
+- [x] All CI workflows green on `main` (Rust, Go, C, Python, REUSE).
+- [x] `CHANGELOG.md` has a dated release entry for the version being published.
+- [x] Git tag `v0.2.0` created and pushed.
 
 ---
 
-## 3. nixpkgs — `base91` package
+## 1. crates.io
 
-**What:** Contribute the Rust-based `base91` CLI tool (and optionally the C library) to the official nixpkgs package set, replacing or supplementing the existing `base91` package (currently Joachim Henke's C implementation).
+### 1a. `base91-rs` library crate — DONE
 
-**Current nixpkgs status:** `pkgs.base91` exists (the C reference). A Rust port would be a separate package or an updated derivation.
+- [x] Published at `https://crates.io/crates/base91-rs`
+- Note: name `base91` was taken by `dnsl48`; published as `base91-rs`.
 
-**Approach:**
+### 1b. `base91-cli` binary crate — DONE
 
-1. Fork nixpkgs and create `pkgs/by-name/ba/base91/package.nix` (nixpkgs new-style packaging).
-2. The derivation uses `rustPlatform.buildRustPackage` (not crane, which is project-local):
-   ```nix
-   { lib, rustPlatform, installShellFiles }:
-   rustPlatform.buildRustPackage {
-     pname   = "base91";
-     version = "0.2.0";
-     src     = fetchFromGitHub { owner = "douzebis"; repo = "base91"; rev = "v0.2.0"; hash = "..."; };
-     cargoHash = "...";
-     buildAndTestSubdir = "rust";
-     nativeBuildInputs = [ installShellFiles ];
-     # postInstall: completions, symlinks, man page
-   }
-   ```
-3. The C compilation in `build.rs` (`../../src/base91.c`) needs the same fix as crates.io (see §1 above): either bundle the C source inside `rust/` or gate it behind a feature.
-4. Open a PR against nixpkgs. The review process typically asks for:
-   - `nix-build` passes
-   - `nixpkgs-review` passes
-   - Meta fields complete (description, homepage, license, maintainers, platforms)
-   - Man page and shell completions installed
-
-**Timeline note:** nixpkgs PRs for new packages typically take 2–6 weeks to merge. A maintainer listing of `@douzebis` keeps future update PRs self-serviceable.
+- [x] Published at `https://crates.io/crates/base91-cli`
 
 ---
 
-## Summary table
+## 2. PyPI — `pybase91` — DONE
 
-| Venue    | Package name | Build tool         | Priority |
-|----------|--------------|--------------------|----------|
-| crates.io | `base91`    | `cargo publish`    | High — unblocked, just needs README + path fix |
-| PyPI     | `pybase91`   | `maturin`          | Medium — needs maturin migration |
-| nixpkgs  | `base91`     | `rustPlatform`     | Low — needs upstream path fix first |
+- [x] PyPI project `pybase91` created.
+- [x] Trusted Publisher configured: owner `douzebis`, repo `base91`,
+  workflow `pypi.yml`, environment `pypi`.
+- [x] Published at `https://pypi.org/project/pybase91/`
+- Wheels: Linux x86_64 + aarch64 (manylinux_2_36), macOS x86_64 + aarch64,
+  sdist. Python 3.11–3.13.
 
-The C-source path fix (option b in §1: make it a feature-gated optional bench dep) unblocks all three venues simultaneously.
+---
+
+## 3. nixpkgs — TODO
+
+**Current state:** Not yet submitted. Crates.io is live so this is unblocked.
+The derivation has been tested locally and builds successfully.
+
+- [ ] Sync `douzebis/nixpkgs` fork with upstream `master`.
+- [ ] Create branch `base91-init`.
+- [ ] Create `pkgs/by-name/ba/base91/package.nix`:
+  ```nix
+  { lib, rustPlatform, installShellFiles }:
+  rustPlatform.buildRustPackage {
+    pname   = "base91";
+    version = "0.2.0";
+
+    src = fetchFromGitHub {
+      owner = "douzebis";
+      repo  = "base91";
+      rev   = "v0.2.0";
+      hash  = "sha256-ZuSDn/W7oC0An8wbdS/KW+V5KG/1QwCVtf6uP4tMmiM=";
+    } + "/rust";
+
+    cargoHash = "sha256-4BVJl3KcsJOO3/TMvFzasZHVKe+AQoE/ItzlSvOYzTU=";
+
+    cargoExtraArgs = "-p base91-cli";
+
+    nativeBuildInputs = [ installShellFiles ];
+
+    postInstall = ''
+      ln -s base91 $out/bin/b91enc
+      ln -s base91 $out/bin/b91dec
+      out_dir=$(find . -path "*/build/base91-cli-*/out" -maxdepth 6 | head -1)
+      if [ -n "$out_dir" ]; then
+        install -Dm444 "$out_dir/base91.1" $out/share/man/man1/base91.1
+        installShellCompletion --cmd base91 \
+          --bash "$out_dir/base91.bash" \
+          --zsh  "$out_dir/_base91" \
+          --fish "$out_dir/base91.fish"
+      fi
+    '';
+
+    meta = with lib; {
+      description = "basE91 binary-to-text encoder/decoder";
+      homepage    = "https://github.com/douzebis/base91";
+      license     = licenses.mit;
+      maintainers = [ maintainers.douzebis ];
+      mainProgram = "base91";
+      platforms   = platforms.unix;
+    };
+  }
+  ```
+- [ ] Add `douzebis` to `maintainers/maintainer-list.nix` if not present.
+- [ ] Build and test locally against nixpkgs master.
+- [ ] Open PR: `base91: init at 0.2.0`.
+- [ ] Respond to reviewer feedback. Merge time typically 2–6 weeks.
+
+---
+
+## Summary
+
+| Registry  | Package      | Status |
+|-----------|--------------|--------|
+| crates.io | `base91-rs`  | published v0.2.0 |
+| crates.io | `base91-cli` | published v0.2.0 |
+| PyPI      | `pybase91`   | published v0.2.0 |
+| Go proxy  | `github.com/douzebis/base91/go` | live (automatic on tag) |
+| nixpkgs   | `base91`     | PR not yet opened |
