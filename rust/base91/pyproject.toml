@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[build-system]
+requires      = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name            = "pybase91"
+version         = "0.2.0"
+description     = "basE91 binary-to-text encoding — Python extension (Rust/PyO3)"
+license         = { text = "MIT" }
+requires-python = ">=3.9"
+
+[tool.maturin]
+features      = ["python"]
+module-name   = "pybase91.pybase91"

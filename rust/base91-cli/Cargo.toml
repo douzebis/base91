@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name        = "base91-cli"
+version     = "0.2.0"
+edition     = "2021"
+description = "basE91 command-line encoder/decoder"
+license     = "MIT"
+repository  = "https://github.com/douzebis/base91"
+
+[[bin]]
+name = "base91"
+path = "src/main.rs"
+
+[dependencies]
+base91        = { path = "../base91", default-features = false, features = ["std", "io"] }
+clap          = { version = "4", features = ["derive"] }
+clap_complete = "4"
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+clap          = { version = "4", features = ["derive"] }
+clap_complete = "4"
+clap_mangen   = "0.2"

@@ -1,11 +1,6 @@
-# SPDX-FileCopyrightText: 2025 2025 Frederic Ruget <fred@atlant.is>
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 #
 # SPDX-License-Identifier: MIT
 
-{ pkgs ? import <nixpkgs> {} }:
-
-pkgs.mkShell {
-  buildInputs = [
-    (pkgs.callPackage ./base91.nix {})
-  ];
-}
+# Entry point for `nix-shell` — delegates to the dev-shell output of default.nix.
+(import ./default.nix {}).dev-shell
