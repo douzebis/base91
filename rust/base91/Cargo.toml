@@ -4,7 +4,7 @@
 
 [package]
 name        = "base91-rs"
-version     = "0.2.0"
+version     = "0.2.1"
 edition     = "2021"
 rust-version = "1.91"
 description = "basE91 binary-to-text encoding — fast, no_std-compatible Rust implementation"

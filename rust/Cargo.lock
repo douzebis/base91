@@ -89,8 +89,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "base91"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4eb5fbae7b5ee422f239444a3dca9bdf5ecb3abf3af1bf87c8097db3f7bc025"
+
+[[package]]
 name = "base91-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base91-rs",
  "clap",
@@ -101,8 +107,9 @@ dependencies = [
 
 [[package]]
 name = "base91-rs"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
+ "base91",
  "cc",
  "criterion",
  "pyo3",

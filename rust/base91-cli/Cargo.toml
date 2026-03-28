@@ -4,7 +4,7 @@
 
 [package]
 name        = "base91-cli"
-version     = "0.2.0"
+version     = "0.2.1"
 edition     = "2021"
 rust-version = "1.91"
 description = "basE91 command-line encoder/decoder"
@@ -16,7 +16,7 @@ name = "base91"
 path = "src/main.rs"
 
 [dependencies]
-base91        = { version = "0.2.0", package = "base91-rs", path = "../base91", default-features = false, features = ["std", "io"] }
+base91        = { version = "0.2.1", package = "base91-rs", path = "../base91", default-features = false, features = ["std", "io"] }
 clap          = { version = "4", features = ["derive"] }
 clap_complete = "4"
 
