@@ -261,8 +261,14 @@ fn encode_into(input: &[u8], max_level: SimdLevel, wrap: usize, output: &mut Vec
         ArchLevel::Avx2 => {
             let full = (input.len() / 26) * 26;
             unsafe { x86::encode_avx2(&input[..full], output) };
+            // Handle 13–25 byte tail with SSE4.1 before falling to scalar.
+            let tail = &input[full..];
+            let sse_full = (tail.len() / 13) * 13;
+            if sse_full > 0 {
+                unsafe { x86::encode_sse41(&tail[..sse_full], output) };
+            }
             let mut sc = scalar::ScalarEncoder::new();
-            sc.encode(&input[full..], output);
+            sc.encode(&tail[sse_full..], output);
             sc.finish(output);
         }
         #[cfg(target_arch = "x86_64")]
@@ -301,8 +307,16 @@ fn decode_into(input: &[u8], max_level: SimdLevel, output: &mut Vec<u8>) -> bool
             if !unsafe { x86::decode_avx2(&input[..full], output) } {
                 return false;
             }
+            // Handle 16–31 char tail with SSE4.1 before falling to scalar.
+            let tail = &input[full..];
+            let sse_full = (tail.len() / 16) * 16;
+            if sse_full > 0 {
+                if !unsafe { x86::decode_sse41(&tail[..sse_full], output) } {
+                    return false;
+                }
+            }
             let mut sc = scalar::ScalarDecoder::new();
-            sc.decode(&input[full..], output);
+            sc.decode(&tail[sse_full..], output);
             sc.finish(output);
             true
         }
