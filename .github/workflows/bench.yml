@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+name: Bench
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/bench.yml'
+  pull_request:
+    paths:
+      - 'rust/**'
+      - '.github/workflows/bench.yml'
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: bench (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: bench-${{ matrix.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: bench-${{ matrix.os }}-
+
+      # Criterion writes HTML reports to rust/target/criterion/.
+      # --bench selects benchmark binaries; -- --output-format bencher
+      # emits machine-readable lines to stdout for easy log parsing.
+      - name: Run benchmarks
+        working-directory: rust
+        run: >
+          cargo bench
+          -p base91-rs
+          --bench throughput
+          -- --output-format bencher
+          2>&1 | tee ../bench-${{ matrix.os }}.txt
+
+      - name: Upload Criterion HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-report-${{ matrix.os }}
+          path: rust/target/criterion/
+          if-no-files-found: warn
+
+      - name: Upload bench summary (text)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-summary-${{ matrix.os }}
+          path: bench-${{ matrix.os }}.txt
+          if-no-files-found: warn
