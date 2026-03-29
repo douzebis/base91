@@ -10,7 +10,7 @@ Machine: Intel Core Ultra 7 165U, pinned to P-cores 0+2 (no HT sibling contentio
 Compilers: rustc 1.91.1 (LLVM), clang 21.1.7.
 Bench tool: Criterion (100 samples, 1 MiB deterministic input, seed 0xdeadbeef_cafebabe).
 Bench numbers in §2 measured at commit e30b49e.
-Bench numbers in §3 measured at commit 390518d + scalar encode branch elimination.
+Bench numbers in §3 measured at commit 069742d (pshufb scatter + branch elimination + direct store).
 
 ---
 
@@ -139,6 +139,12 @@ encode blocks unrolled 8 pairs deep with `spare_capacity_mut` output.
 `dec_char` uses branchless arithmetic: `b.wrapping_sub(0x23).wrapping_sub((b > 0x5C) as u8)` —
 three instructions (`cmp $0x5D; adc $-1; lea -35`).
 
+**Input validity:** all three decode paths (scalar, SSE4.1, AVX2) assume
+well-formed input.  Non-alphabet bytes (other than an optional `\n` at each
+16-char block boundary) silently corrupt the decoded output rather than
+returning an error.  Callers are responsible for ensuring the input stream
+contains only SIMD-alphabet characters.
+
 ### 3.2 SIMD kernels (x86_64)
 
 **SSE4.1** (13 bytes → 16 chars per call, 128-bit XMM):
@@ -162,7 +168,7 @@ Decode throughput is measured on encoded bytes (encoded ≈ 1.23× input).
 
 | Path | Encode | Decode |
 |---|---|---|
-| scalar fixed-width | ~1.52 GiB/s | ~1.64 GiB/s |
+| scalar fixed-width | ~1.52 GiB/s | ~2.31 GiB/s |
 | simd128 (SSE4.1)   | ~4.40 GiB/s | ~6.25 GiB/s |
 | simd256 (AVX2)     | ~7.68 GiB/s | ~8.57 GiB/s |
 | Henke `encode_unchecked` (reference) | ~993 MiB/s | ~1.15 GiB/s |
@@ -179,10 +185,13 @@ After: simd128 ~6.25 GiB/s (+31%), simd256 ~8.57 GiB/s (+68%).
 simd256 is now ~1.37× simd128 on decode (was ~1.07×), matching encode scaling.
 
 **Scalar fixed-width outperforms Henke on both encode and decode.**
-Encode: ~1.52 GiB/s vs ~993 MiB/s (+53%).  Decode: ~1.64 GiB/s vs ~1.15 GiB/s.
-The scalar encode gain came from eliminating 13 `if nbits >= 13` branches per
-13-byte block: with nbits=0 at each block entry, emit positions are fixed, so
-the unrolled loop uses branch-free `ingest_no_emit!`/`ingest_emit!` macros.
+Encode: ~1.52 GiB/s vs ~993 MiB/s (+53%).  Decode: ~2.31 GiB/s vs ~1.15 GiB/s (+101%).
+Both gains come from eliminating fixed-pattern branches per block when nbits=0:
+encode removes 13 `if nbits >= 13` checks; decode removes 8 `if nbits >= 8`
+second-drain checks.  In both cases the emit positions are compile-time
+constants at block entry, so the generic macro is split into
+`_no_emit!`/`_emit!` (encode) and `_single!`/`_double!` (decode) variants
+used at their hardcoded positions.
 See §2.4 for the Henke bottleneck analysis.
 
 ### 3.5 Profiling: SIMD hotspots (`perf record -e cpu-clock`)
