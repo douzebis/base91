@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use rand::RngCore;
+use rand::{RngCore, SeedableRng};
 
 // competitor crate (base91 v0.1.0 by dnsl48)
 use base91_dnsl48 as base91_other;
@@ -54,15 +54,16 @@ mod c_ref {
 // ---------------------------------------------------------------------------
 
 const SIZE: usize = 1024 * 1024; // 1 MiB
+const SEED: u64 = 0xdeadbeef_cafebabe;
 
-fn random_bytes(size: usize) -> Vec<u8> {
+fn seeded_bytes(size: usize) -> Vec<u8> {
     let mut buf = vec![0u8; size];
-    rand::thread_rng().fill_bytes(&mut buf);
+    rand::rngs::SmallRng::seed_from_u64(SEED).fill_bytes(&mut buf);
     buf
 }
 
 fn bench_encode(c: &mut Criterion) {
-    let input = random_bytes(SIZE);
+    let input = seeded_bytes(SIZE);
     let mut enc_buf = vec![0u8; base91::encode_size_hint(input.len())];
 
     let mut g = c.benchmark_group("encode");
@@ -101,7 +102,7 @@ fn bench_encode(c: &mut Criterion) {
 }
 
 fn bench_decode(c: &mut Criterion) {
-    let input = random_bytes(SIZE);
+    let input = seeded_bytes(SIZE);
     let encoded = {
         let mut buf = vec![0u8; base91::encode_size_hint(input.len())];
         let n = unsafe { base91::encode_unchecked(&input, buf.as_mut_ptr()) };
@@ -149,7 +150,7 @@ fn bench_decode(c: &mut Criterion) {
 
 fn bench_encode_simd(c: &mut Criterion) {
     use base91::simd::SimdLevel;
-    let input = random_bytes(SIZE);
+    let input = seeded_bytes(SIZE);
 
     let mut g = c.benchmark_group("encode_simd");
     g.throughput(Throughput::Bytes(input.len() as u64));
@@ -169,7 +170,7 @@ fn bench_encode_simd(c: &mut Criterion) {
 
 fn bench_decode_simd(c: &mut Criterion) {
     use base91::simd::SimdLevel;
-    let input = random_bytes(SIZE);
+    let input = seeded_bytes(SIZE);
     let encoded = base91::simd::encode(&input, SimdLevel::default(), 0);
 
     let mut g = c.benchmark_group("decode_simd");

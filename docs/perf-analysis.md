@@ -7,8 +7,9 @@ SPDX-License-Identifier: MIT
 # basE91 Performance Analysis
 
 Machine: Intel Core Ultra 7 165U, AC power, turbo enabled.
-Compilers: rustc 1.86.0 (LLVM), clang 21.1.7.
+Compilers: rustc 1.91.1 (LLVM), clang 21.1.7.
 Bench tool: Criterion (100 samples, 1 MiB random input).
+Measured at commit 410fde9.
 
 ---
 
@@ -77,13 +78,13 @@ Key fixes required to reach this state:
 
 | Implementation | Encode | Decode |
 |---|---|---|
-| Rust `encode_unchecked` | ~915 MiB/s | ~1215 MiB/s |
-| C (clang -O3, `__restrict__`, static tables, dup writes) | ~1013 MiB/s | ~1165 MiB/s |
-| Rust `encode` (safe, `spare_capacity_mut`) | ~881 MiB/s | ~989 MiB/s |
+| Rust `encode_unchecked` | ~953 MiB/s | ~1.23 GiB/s |
+| Rust `encode` (safe, `spare_capacity_mut`) | ~774 MiB/s | ~1011 MiB/s |
+| base91 v0.1.0 (dnsl48) | ~717 MiB/s | ~899 MiB/s |
 
-The safe API switched from `Vec::push` to `spare_capacity_mut` + `set_len`
-to keep `ptr` register-resident — `Vec::push` forces LLVM to spill and
-reload the pointer because `grow_one()` may reallocate.
+The safe API uses `spare_capacity_mut` + `set_len` to keep `ptr`
+register-resident — `Vec::push` forces LLVM to spill and reload the
+pointer because `grow_one()` may reallocate.
 
 ---
 
@@ -122,37 +123,32 @@ No cross-lane interaction.
 
 ### 3.3 SIMD benchmark results (1 MiB random input)
 
-Throughput measured on encoded bytes for decode (encoded ≈ 1.23× input).
+Decode throughput is measured on encoded bytes (encoded ≈ 1.23× input).
 
 | Path | Encode | Decode |
 |---|---|---|
-| scalar fixed-width | ~864 MiB/s | ~1.72 GiB/s |
-| simd128 (SSE4.1)   | ~3.28 GiB/s | ~5.14 GiB/s |
-| simd256 (AVX2)     | ~6.30 GiB/s | ~4.71 GiB/s |
-| Henke `encode_unchecked` (reference) | ~915 MiB/s | ~1215 MiB/s |
+| scalar fixed-width | ~1.13 GiB/s | ~1.72 GiB/s |
+| simd128 (SSE4.1)   | ~4.52 GiB/s | ~5.11 GiB/s |
+| simd256 (AVX2)     | ~8.24 GiB/s | ~5.44 GiB/s |
+| Henke `encode_unchecked` (reference) | ~953 MiB/s | ~1.23 GiB/s |
 
 ### 3.4 Observations
 
-**Encode: simd256 is ~2× simd128** as expected — AVX2 processes two
-13-byte blocks per iteration vs one for SSE4.1, halving iteration count
-and loop overhead.
+**Encode: simd256 is ~1.8× simd128** — AVX2 processes two 13-byte blocks
+per iteration vs one for SSE4.1, roughly halving iteration count.
 
-**Decode: simd128 > simd256** (~5.1 vs ~4.7 GiB/s).  Both kernels perform
-the SIMD character unmap in hardware, but both then fall through to a
-scalar u128 bit-pack to reconstruct the output bytes (8 OR-shift
-operations per 13-byte block).  The AVX2 path processes 32 chars but then
-runs two sequential 13-byte extractions; the extra bookkeeping slightly
-outweighs the wider unmap.  A vectorised scatter step would push decode
-throughput closer to encode.
+**Decode: simd256 ≈ simd128** (~5.4 vs ~5.1 GiB/s, within noise).  Both
+kernels perform the SIMD character unmap in hardware, then fall through to
+a scalar u128 bit-pack (8 OR-shift operations per 13-byte block).  AVX2
+processes 32 chars but runs two sequential bit-packs; the extra work nearly
+cancels the gain from the wider unmap.  A vectorised scatter step would
+push decode throughput toward encode levels.
 
-**Scalar fixed-width decode (~1.72 GiB/s) is well above Henke decode
-(~1215 MiB/s).**  The earlier ~293 MiB/s figure was before the 16-byte
-block restructuring of `ScalarDecoder::decode`.
-
-**Scalar fixed-width encode (~864 MiB/s) is slightly below Henke
-(~915 MiB/s).**  The scalar path uses the same `spare_capacity_mut`
-pattern; the gap is the fixed-width arithmetic overhead vs the
-well-predicted Henke branch.
+**Scalar fixed-width outperforms Henke on both encode and decode.**
+Encode: ~1.13 GiB/s vs ~953 MiB/s.  Decode: ~1.72 GiB/s vs ~1.23 GiB/s.
+The Henke loop has a serial `queue` loop-carried dependency (`or`/`imul`
+bottleneck visible under `perf annotate`); the scalar fixed-width path
+unrolls 13-byte blocks 8 pairs deep, breaking the dependency chain.
 
 ---
 
