@@ -282,7 +282,6 @@ let
       # C toolchain
       clang           # C compiler (LLVM backend, used for bench and libbase91)
       llvmPackages.bintools  # llvm-objcopy + llvm-ar (build.rs symbol rename)
-      binutils        # objcopy + ar fallback; keep for c-compat-tests build.rs
       # Python + maturin (for PyO3 development builds and PyPI publishing)
       python313
       maturin
@@ -293,9 +292,10 @@ let
       gh
       # Man page viewer
       mandoc
-      # Profiling
-      linuxPackages.perf
-      valgrind
+      # Profiling — samply works on Linux (perf_event_open) and macOS (ktrace)
+      samply
+    ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+      binutils        # objcopy + ar fallback; keep for c-compat-tests build.rs
     ];
 
     # PyO3 needs to find the Python interpreter at compile time.
