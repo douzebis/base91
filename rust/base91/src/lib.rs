@@ -58,6 +58,7 @@ mod codec;
 pub mod io;
 #[cfg(feature = "python")]
 pub mod python;
+pub mod simd;
 
 pub use codec::{Decoder, Encoder};
 

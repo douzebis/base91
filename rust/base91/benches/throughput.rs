@@ -147,5 +147,64 @@ fn bench_decode(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_encode, bench_decode);
+fn bench_encode_simd(c: &mut Criterion) {
+    use base91::simd::SimdLevel;
+    let input = random_bytes(SIZE);
+
+    let mut g = c.benchmark_group("encode_simd");
+    g.throughput(Throughput::Bytes(input.len() as u64));
+
+    g.bench_with_input(BenchmarkId::new("scalar", "1mib"), &input, |b, input| {
+        b.iter(|| base91::simd::encode(input, SimdLevel::Scalar, 0));
+    });
+    g.bench_with_input(BenchmarkId::new("simd128", "1mib"), &input, |b, input| {
+        b.iter(|| base91::simd::encode(input, SimdLevel::Simd128, 0));
+    });
+    g.bench_with_input(BenchmarkId::new("simd256", "1mib"), &input, |b, input| {
+        b.iter(|| base91::simd::encode(input, SimdLevel::Simd256, 0));
+    });
+
+    g.finish();
+}
+
+fn bench_decode_simd(c: &mut Criterion) {
+    use base91::simd::SimdLevel;
+    let input = random_bytes(SIZE);
+    let encoded = base91::simd::encode(&input, SimdLevel::default(), 0);
+
+    let mut g = c.benchmark_group("decode_simd");
+    g.throughput(Throughput::Bytes(encoded.len() as u64));
+
+    g.bench_with_input(
+        BenchmarkId::new("scalar", "1mib"),
+        &encoded,
+        |b, encoded| {
+            b.iter(|| base91::simd::decode(encoded, SimdLevel::Scalar));
+        },
+    );
+    g.bench_with_input(
+        BenchmarkId::new("simd128", "1mib"),
+        &encoded,
+        |b, encoded| {
+            b.iter(|| base91::simd::decode(encoded, SimdLevel::Simd128));
+        },
+    );
+    g.bench_with_input(
+        BenchmarkId::new("simd256", "1mib"),
+        &encoded,
+        |b, encoded| {
+            b.iter(|| base91::simd::decode(encoded, SimdLevel::Simd256));
+        },
+    );
+
+    g.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_encode,
+    bench_decode,
+    bench_encode_simd,
+    bench_decode_simd
+);
 criterion_main!(benches);

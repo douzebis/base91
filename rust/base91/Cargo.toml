@@ -36,6 +36,8 @@ python         = ["pyo3", "pyo3-stub-gen", "pyo3-stub-gen-derive"]
 # Requires gcc, objcopy, and ar on PATH, and src/base91.{c,h} two levels up.
 # Never enabled by default; not part of the published crate.
 c-compat-tests = ["dep:cc"]
+# Force scalar path even when SIMD is available (useful for benchmarking).
+force-scalar = []
 
 [dependencies]
 pyo3                 = { version = "0.26", features = ["extension-module"], optional = true }

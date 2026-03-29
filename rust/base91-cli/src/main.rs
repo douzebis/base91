@@ -81,6 +81,14 @@ struct Cli {
     #[arg(short = 'w', long, value_name = "COLS")]
     wrap: Option<usize>,
 
+    /// Use the SIMD fixed-width variant for encoding.
+    ///
+    /// Output begins with '-' and uses the SIMD alphabet; not compatible with
+    /// legacy Henke decoders. Ignored when decoding. With --wrap, the value
+    /// must be a multiple of 16.
+    #[arg(long)]
+    simd: bool,
+
     /// Generate shell completions for SHELL and exit.
     #[arg(long, value_name = "SHELL", hide = true)]
     completions: Option<Shell>,
@@ -214,6 +222,33 @@ fn do_encode(
     Ok((itotal, ototal))
 }
 
+fn do_encode_simd(
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+    buf_size: usize,
+    wrap: usize,
+) -> io::Result<(usize, usize)> {
+    let ibuf_size = compute_ibuf_encode(buf_size);
+    let mut ibuf = vec![0u8; ibuf_size];
+    let mut itotal: usize = usize::default();
+
+    // Buffer the entire input, then encode in one shot.
+    let mut raw: Vec<u8> = Vec::new();
+    loop {
+        let n = input.read(&mut ibuf)?;
+        if n == 0 {
+            break;
+        }
+        itotal += n;
+        raw.extend_from_slice(&ibuf[..n]);
+    }
+    let encoded = base91::simd::encode(&raw, base91::simd::SimdLevel::default(), wrap);
+
+    let ototal = encoded.len();
+    output.write_all(&encoded)?;
+    Ok((itotal, ototal))
+}
+
 fn compute_ibuf_encode(buf_size: usize) -> usize {
     // Mirror the C CLI arithmetic: ibuf_size = (buf_size - 2) * 16 / 29
     let n = (buf_size.saturating_sub(2)) * 16 / 29;
@@ -282,12 +317,19 @@ fn run() -> io::Result<()> {
         decode_default
     };
 
+    let simd = cli.simd && !decode;
     let buf_size = cli.buffer.unwrap_or(65536);
     let wrap = cli
         .wrap
         .or(if decode { None } else { wrap_default })
         .unwrap_or(0);
     let verbose = cli.verbose;
+
+    // Validate --wrap multiple-of-16 constraint for --simd.
+    if simd && wrap != 0 && wrap % 16 != 0 {
+        eprintln!("base91: --wrap value must be a multiple of 16 when --simd is active");
+        std::process::exit(1);
+    }
 
     // Validate buffer size.
     if decode {
@@ -330,12 +372,16 @@ fn run() -> io::Result<()> {
         if verbose >= 1 {
             eprintln!("\tdone ({ototal} bytes)");
         }
+    } else if simd {
+        let (itotal, _ototal) = do_encode_simd(&mut *input, &mut *output, buf_size, wrap)?;
+        output.flush()?;
+        if verbose >= 1 {
+            eprintln!("\t{itotal} bytes encoded (SIMD variant)");
+        }
     } else {
         let (itotal, _ototal) = do_encode(&mut *input, &mut *output, buf_size, wrap)?;
         output.flush()?;
         if verbose >= 1 {
-            // Recompute actual ratio from the output sink.
-            // For simplicity, report input size; a counting writer would give exact ratio.
             eprintln!("\t{itotal} bytes encoded");
         }
     }

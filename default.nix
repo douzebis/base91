@@ -293,6 +293,9 @@ let
       gh
       # Man page viewer
       mandoc
+      # Profiling
+      linuxPackages.perf
+      valgrind
     ];
 
     # PyO3 needs to find the Python interpreter at compile time.
