@@ -219,17 +219,93 @@ pub(crate) unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> boo
     let vals = vmlaq_u16(lo16, hi16, vdupq_n_u16(91));
 
     // -----------------------------------------------------------------------
-    // Step 3: Pack 8 × 13-bit values back into 13 bytes (scalar accumulator).
+    // Step 3: Scatter 8 × 13-bit values back into 13 output bytes using
+    // vqtbl1q_u8 (NEON equivalent of pshufb).
+    //
+    // Mirror of the x86 pshufb scatter design:
+    //   - Widen vals (u16x8) to two u32x4 registers: lo_g (g0–g3), hi_g (g4–g7).
+    //   - Left-shift each 32-bit lane by the group's in-byte offset.
+    //   - vqtbl1q_u8 aligns secondary contributors to primary byte slots; OR merges.
+    //   - A second vqtbl1q_u8 scatters merged bytes to final output positions.
+    //   - OR lo_out and hi_out; store 16 bytes (safe: caller reserves extra space).
+    //
+    // vqtbl1q_u8(tbl, idx): out[i] = (idx[i] >= 16) ? 0 : tbl[idx[i]].
+    // Index 0xFF (≥ 16) produces a zero byte — same as pshufb index 0x80.
     // -----------------------------------------------------------------------
-    let mut vals_arr = [0u16; 8];
-    vst1q_u16(vals_arr.as_mut_ptr(), vals);
 
-    let mut bit_buf: u128 = 0;
-    for (i, &v) in vals_arr.iter().enumerate() {
-        bit_buf |= (v as u128) << (i * 13);
-    }
-    let bytes = bit_buf.to_le_bytes();
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, 13);
+    // Widen u16x8 → two u32x4.
+    let lo16 = vget_low_u16(vals);
+    let hi16 = vget_high_u16(vals);
+    let lo_g = vmovl_u16(lo16); // u32x4: g0,g1,g2,g3
+    let hi_g = vmovl_u16(hi16); // u32x4: g4,g5,g6,g7
+
+    // Left-shift each lane by its group's in-byte bit offset.
+    // lo group shifts: lane0=0, lane1=5, lane2=2, lane3=7.
+    let lo_s0 = lo_g;
+    let lo_s2 = vshlq_n_u32(lo_g, 2);
+    let lo_s5 = vshlq_n_u32(lo_g, 5);
+    let lo_s7 = vshlq_n_u32(lo_g, 7);
+    // vbslq_u32(mask, a, b): result[i] = (mask[i] & a[i]) | (~mask[i] & b[i])
+    let mask0: [u32; 4] = [0xFFFFFFFF, 0, 0, 0];
+    let mask1: [u32; 4] = [0, 0xFFFFFFFF, 0, 0];
+    let mask2: [u32; 4] = [0, 0, 0xFFFFFFFF, 0];
+    let mask3: [u32; 4] = [0, 0, 0, 0xFFFFFFFF];
+    let m0 = vld1q_u32(mask0.as_ptr());
+    let m1 = vld1q_u32(mask1.as_ptr());
+    let m2 = vld1q_u32(mask2.as_ptr());
+    let m3 = vld1q_u32(mask3.as_ptr());
+    let lo_a = vbslq_u32(m0, lo_s0, lo_s7);
+    let lo_b = vbslq_u32(m1, lo_s5, lo_a);
+    let lo_c = vbslq_u32(m2, lo_s2, lo_b);
+    let lo_shifted = vreinterpretq_u8_u32(vbslq_u32(m3, lo_s7, lo_c));
+
+    // hi group shifts: lane0=4, lane1=1, lane2=6, lane3=3.
+    let hi_s1 = vshlq_n_u32(hi_g, 1);
+    let hi_s3 = vshlq_n_u32(hi_g, 3);
+    let hi_s4 = vshlq_n_u32(hi_g, 4);
+    let hi_s6 = vshlq_n_u32(hi_g, 6);
+    let hi_a = vbslq_u32(m0, hi_s4, hi_s3);
+    let hi_b = vbslq_u32(m1, hi_s1, hi_a);
+    let hi_c = vbslq_u32(m2, hi_s6, hi_b);
+    let hi_shifted = vreinterpretq_u8_u32(vbslq_u32(m3, hi_s3, hi_c));
+
+    // Merge secondary contributors into primary byte slots.
+    // lo: B1←L[1]|L[4], B3←L[6]|L[8], B4←L[9]|L[12]
+    // Route secondaries: L[4]→pos1, L[8]→pos6, L[12]→pos9.
+    let sec_lo_idx: [u8; 16] = [
+        0xFF, 4, 0xFF, 0xFF, 0xFF, 0xFF, 8, 0xFF, 0xFF, 12, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    ];
+    let sec_lo_tbl = vld1q_u8(sec_lo_idx.as_ptr());
+    let lo_merged = vorrq_u8(lo_shifted, vqtbl1q_u8(lo_shifted, sec_lo_tbl));
+
+    // Scatter lo_merged to output bytes B0–B6.
+    // lo_merged bytes of interest: 0→B0, 1→B1, 5→B2, 6→B3, 9→B4, 13→B5, 14→B6.
+    let scatter_lo_idx: [u8; 16] = [
+        0, 1, 5, 6, 9, 13, 14, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    ];
+    let scatter_lo_tbl = vld1q_u8(scatter_lo_idx.as_ptr());
+    let lo_out = vqtbl1q_u8(lo_merged, scatter_lo_tbl);
+
+    // hi: B8←H[2]|H[4], B9←H[5]|H[8], B11←H[10]|H[12]
+    // Route secondaries: H[4]→pos2, H[8]→pos5, H[12]→pos10.
+    let sec_hi_idx: [u8; 16] = [
+        0xFF, 0xFF, 4, 0xFF, 0xFF, 8, 0xFF, 0xFF, 0xFF, 0xFF, 12, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    ];
+    let sec_hi_tbl = vld1q_u8(sec_hi_idx.as_ptr());
+    let hi_merged = vorrq_u8(hi_shifted, vqtbl1q_u8(hi_shifted, sec_hi_tbl));
+
+    // Scatter hi_merged to output bytes B6–B12.
+    // hi_merged bytes of interest: 0→B6, 1→B7, 2→B8, 5→B9, 9→B10, 10→B11, 13→B12.
+    let scatter_hi_idx: [u8; 16] = [
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 1, 2, 5, 9, 10, 13, 0xFF, 0xFF, 0xFF,
+    ];
+    let scatter_hi_tbl = vld1q_u8(scatter_hi_idx.as_ptr());
+    let hi_out = vqtbl1q_u8(hi_merged, scatter_hi_tbl);
+
+    // Combine and store 16 bytes (decode_neon reserves extra output space,
+    // so 3 bytes of overwrite into spare capacity are safe).
+    let out128 = vorrq_u8(lo_out, hi_out);
+    vst1q_u8(output, out128);
 
     true
 }
