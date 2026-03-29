@@ -371,11 +371,12 @@ pub(crate) unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> bo
     );
     let hi_out = _mm_shuffle_epi8(hi_merged, scatter_hi);
 
-    // Combine and store 13 bytes.
+    // Combine and store.
+    // decode_loop reserves out_needed + OUT spare bytes, so writing 16 bytes
+    // here is safe even though only 13 are valid data (3 bytes of harmless
+    // overwrite into spare capacity).
     let out128 = _mm_or_si128(lo_out, hi_out);
-    let mut tmp = [0u8; 16];
-    _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, out128);
-    std::ptr::copy_nonoverlapping(tmp.as_ptr(), output, 13);
+    _mm_storeu_si128(output as *mut __m128i, out128);
 
     true
 }
@@ -607,10 +608,10 @@ pub(crate) unsafe fn decode_block_avx2(input: *const u8, output: *mut u8) -> boo
         let hi_merged = _mm_or_si128(hi_shifted, _mm_shuffle_epi8(hi_shifted, sec_hi_shuf));
         let hi_out = _mm_shuffle_epi8(hi_merged, scatter_hi);
 
+        // decode_loop reserves out_needed + OUT spare bytes; writing 16 bytes
+        // here is safe (3-byte harmless overwrite into spare capacity).
         let out128 = _mm_or_si128(lo_out, hi_out);
-        let mut tmp = [0u8; 16];
-        _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, out128);
-        std::ptr::copy_nonoverlapping(tmp.as_ptr(), dst, 13);
+        _mm_storeu_si128(dst as *mut __m128i, out128);
     }
 
     scatter128(
