@@ -53,6 +53,11 @@ impl ScalarEncoder {
         Self { queue: 0, nbits: 0 }
     }
 
+    /// True when no partial bits are pending (safe to hand-off to SIMD).
+    pub fn is_aligned(&self) -> bool {
+        self.nbits == 0
+    }
+
     /// Encode `input` bytes, appending SIMD-alphabet characters to `output`.
     pub fn encode(&mut self, input: &[u8], output: &mut Vec<u8>) {
         // Upper bound: ceil(input_len * 16 / 13) + 2 for finish headroom.

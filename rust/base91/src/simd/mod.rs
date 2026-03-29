@@ -421,8 +421,52 @@ impl Encoder {
             output.push(b'-');
             self.prefix_written = true;
         }
-        encode_into(input, self.max_level, self.wrap, output);
-        let _ = &mut self.scalar; // used in finish()
+        // If there are pending carry bits from the previous chunk, drain them
+        // through the scalar encoder until alignment (nbits==0) is restored,
+        // then let SIMD process the remaining aligned bytes.
+        //
+        // Maximum prefix to drain: at most 12 bits of carry, requiring at most
+        // 2 input bytes (2×8=16 ≥ 13) to complete a group and return to nbits==0.
+        // Feed bytes one at a time until aligned or input exhausted.
+        let input = if !self.scalar.is_aligned() {
+            let mut i = 0;
+            while i < input.len() && !self.scalar.is_aligned() {
+                self.scalar.encode(&input[i..i + 1], output);
+                i += 1;
+            }
+            &input[i..]
+        } else {
+            input
+        };
+
+        match effective_level(self.max_level) {
+            #[cfg(target_arch = "x86_64")]
+            ArchLevel::Avx2 => {
+                let full = (input.len() / 26) * 26;
+                unsafe { x86::encode_avx2(&input[..full], output) };
+                let tail = &input[full..];
+                let sse_full = (tail.len() / 13) * 13;
+                if sse_full > 0 {
+                    unsafe { x86::encode_sse41(&tail[..sse_full], output) };
+                }
+                self.scalar.encode(&tail[sse_full..], output);
+            }
+            #[cfg(target_arch = "x86_64")]
+            ArchLevel::Sse41 => {
+                let full = (input.len() / 13) * 13;
+                unsafe { x86::encode_sse41(&input[..full], output) };
+                self.scalar.encode(&input[full..], output);
+            }
+            #[cfg(target_arch = "aarch64")]
+            ArchLevel::Neon => {
+                let full = (input.len() / 13) * 13;
+                unsafe { aarch64::encode_neon(&input[..full], output) };
+                self.scalar.encode(&input[full..], output);
+            }
+            ArchLevel::Scalar => {
+                self.scalar.encode(input, output);
+            }
+        }
     }
 
     /// Flush remaining bits (0–2 chars).
@@ -581,5 +625,23 @@ mod tests {
         assert_ne!(&simd[1..], henke.as_slice());
         assert_eq!(simd[0], b'-');
         assert_ne!(henke[0], b'-');
+    }
+
+    #[test]
+    fn encoder_chunk_boundaries() {
+        // Verify Encoder produces identical output regardless of chunk split,
+        // covering the carry-state bug where a fresh ScalarEncoder was created
+        // per encode() call, discarding bits from the previous tail.
+        let input: Vec<u8> = (0u8..=255).cycle().take(10_000).collect();
+        let reference = encode(&input, SimdLevel::default(), 0);
+        for chunk_size in [1, 2, 7, 13, 14, 25, 26, 27, 64, 100, 256] {
+            let mut enc = Encoder::new(SimdLevel::default(), 0);
+            let mut out = Vec::new();
+            for chunk in input.chunks(chunk_size) {
+                enc.encode(chunk, &mut out);
+            }
+            enc.finish(&mut out);
+            assert_eq!(out, reference, "chunk_size={chunk_size}");
+        }
     }
 }
