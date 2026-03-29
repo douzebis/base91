@@ -26,11 +26,12 @@ fn build_command() -> Command {
         )
         .after_help(
             "Examples:\n  \
-             base91 file.bin > file.b91       encode binary file\n  \
-             base91 -d file.b91 > file.bin    decode\n  \
-             b91enc < file.bin > file.b91     encode with no line wrapping\n  \
-             b91dec < file.b91 > file.bin     decode\n  \
-             tar czf - dir/ | b91enc          encode tar stream",
+             base91 file.bin > file.b91            encode binary file\n  \
+             base91 -d file.b91 > file.bin         decode\n  \
+             b91enc < file.bin > file.b91          encode with no line wrapping\n  \
+             b91dec < file.b91 > file.bin          decode\n  \
+             base91 --simd file.bin > file.b91s    encode with SIMD variant\n  \
+             tar czf - dir/ | b91enc               encode tar stream",
         )
         .arg(
             Arg::new("decode")
@@ -70,8 +71,20 @@ fn build_command() -> Command {
                 .value_name("COLS")
                 .help(
                     "Wrap encoded lines after COLS characters (0 = no wrap; default 76). \
+                     With --simd, COLS must be a multiple of 16. \
                      Has no effect when decoding.",
                 ),
+        )
+        .arg(
+            Arg::new("simd")
+                .long("simd")
+                .help(
+                    "Use the SIMD fixed-width variant for encoding. \
+                     Output begins with '-' and uses the SIMD alphabet \
+                     (0x23-0x26, 0x28-0x7E); not compatible with legacy \
+                     Henke decoders. Ignored when decoding.",
+                )
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("file")

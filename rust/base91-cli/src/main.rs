@@ -46,11 +46,12 @@ impl Write for CountingWriter<'_> {
     author  = "Joachim Henke (algorithm); Frederic Ruget (Rust port)",
     after_help = "\
 Examples:
-  base91 file.bin > file.b91       encode binary file
-  base91 -d file.b91 > file.bin    decode
-  b91enc < file.bin > file.b91     encode with no line wrapping
-  b91dec < file.b91 > file.bin     decode
-  tar czf - dir/ | b91enc          encode tar stream"
+  base91 file.bin > file.b91            encode binary file
+  base91 -d file.b91 > file.bin         decode
+  b91enc < file.bin > file.b91          encode with no line wrapping
+  b91dec < file.b91 > file.bin          decode
+  base91 --simd file.bin > file.b91s    encode with SIMD variant
+  tar czf - dir/ | b91enc               encode tar stream"
 )]
 struct Cli {
     /// Decode data instead of encoding.
@@ -83,9 +84,11 @@ struct Cli {
 
     /// Use the SIMD fixed-width variant for encoding.
     ///
-    /// Output begins with '-' and uses the SIMD alphabet; not compatible with
-    /// legacy Henke decoders. Ignored when decoding. With --wrap, the value
-    /// must be a multiple of 16.
+    /// Output begins with '-' and uses the SIMD alphabet (0x23-0x26,
+    /// 0x28-0x7E); not compatible with legacy Henke decoders. Output
+    /// contains no single-quote characters and is safe to single-quote
+    /// in shell. Ignored when decoding. With --wrap, the value must be
+    /// a multiple of 16.
     #[arg(long)]
     simd: bool,
 
