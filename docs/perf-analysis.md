@@ -9,7 +9,8 @@ SPDX-License-Identifier: MIT
 Machine: Intel Core Ultra 7 165U, pinned to P-cores 0+2 (no HT sibling contention).
 Compilers: rustc 1.91.1 (LLVM), clang 21.1.7.
 Bench tool: Criterion (100 samples, 1 MiB deterministic input, seed 0xdeadbeef_cafebabe).
-Measured at commit e30b49e.
+Bench numbers in §2 measured at commit e30b49e.
+Bench numbers in §3 measured at commit 390518d + scalar encode branch elimination.
 
 ---
 
@@ -161,23 +162,27 @@ Decode throughput is measured on encoded bytes (encoded ≈ 1.23× input).
 
 | Path | Encode | Decode |
 |---|---|---|
-| scalar fixed-width | ~1.03 GiB/s | ~1.54 GiB/s |
-| simd128 (SSE4.1)   | ~4.26 GiB/s | ~4.78 GiB/s |
-| simd256 (AVX2)     | ~7.66 GiB/s | ~5.12 GiB/s |
+| scalar fixed-width | ~1.52 GiB/s | ~1.64 GiB/s |
+| simd128 (SSE4.1)   | ~4.40 GiB/s | ~6.25 GiB/s |
+| simd256 (AVX2)     | ~7.68 GiB/s | ~8.57 GiB/s |
 | Henke `encode_unchecked` (reference) | ~993 MiB/s | ~1.15 GiB/s |
 
 ### 3.4 Observations
 
-**Encode: simd256 is ~1.8× simd128** (~7.66 vs ~4.26 GiB/s) on P-cores
+**Encode: simd256 is ~1.75× simd128** (~7.68 vs ~4.40 GiB/s) on P-cores
 with full-width AVX2 execution.  Each AVX2 iteration processes two 13-byte
 blocks, roughly halving iteration count vs SSE4.1.
 
-**Decode: simd256 > simd128** (~5.12 vs ~4.78 GiB/s).  Both kernels unmap
-in hardware then fall through to a scalar bit-pack.  The AVX2 path processes
-32 chars per iteration so two bit-packs amortise the wider unmap.
+**Decode: pshufb scatter replaces scalar bit-pack.**  Before: simd128
+~4.78 GiB/s, simd256 ~5.12 GiB/s (bit-pack dominated at 29.4% for SSE4.1).
+After: simd128 ~6.25 GiB/s (+31%), simd256 ~8.57 GiB/s (+68%).
+simd256 is now ~1.37× simd128 on decode (was ~1.07×), matching encode scaling.
 
 **Scalar fixed-width outperforms Henke on both encode and decode.**
-Encode: ~1.03 GiB/s vs ~993 MiB/s.  Decode: ~1.54 GiB/s vs ~1.15 GiB/s.
+Encode: ~1.52 GiB/s vs ~993 MiB/s (+53%).  Decode: ~1.64 GiB/s vs ~1.15 GiB/s.
+The scalar encode gain came from eliminating 13 `if nbits >= 13` branches per
+13-byte block: with nbits=0 at each block entry, emit positions are fixed, so
+the unrolled loop uses branch-free `ingest_no_emit!`/`ingest_emit!` macros.
 See §2.4 for the Henke bottleneck analysis.
 
 ### 3.5 Profiling: SIMD hotspots (`perf record -e cpu-clock`)
@@ -188,12 +193,8 @@ See §2.4 for the Henke bottleneck analysis.
 correction and dominates.  No single-instruction bottleneck; pipeline is
 reasonably balanced across the encode stages.
 
-**simd128 decode** — 96% in `decode_sse41`.  Single dominant hotspot:
-`or %r8d,%r9d` at **29.4%**, followed by `or %r9,%r12` at **7.6%** and
-`pextrw $0x1,%xmm5,%r9d` at **5.4%**.  All three are in the scalar u128
-bit-pack.  The bit-pack is the clear bottleneck; the SIMD unmap phase
-(`movdqa`, `paddb`, `pmullw`) accounts for the remaining ~30% spread across
-multiple instructions.
+**simd128 decode** — scalar bit-pack bottleneck eliminated by pshufb scatter
+(+31% throughput).  Profiling not yet re-run after the scatter rewrite.
 
 **simd256 encode** — 95% in `encode_avx2`.  Top: `vpaddb` (20.8%),
 `vpunpcklbw` (10.6%), `vpaddw` (11.1%), `vpackuswb` (7.2%+),
@@ -202,21 +203,13 @@ multiple instructions.
 4.3% — the multiply is not the bottleneck; the dependent `vpaddw` absorbs
 the latency cost.
 
-**simd256 decode** — 96% in `decode_avx2`.  `or %ebx,%r12d` at **8.7%**
-and `or %ebx,%r12d` (second block) at **3.9%** are the bit-pack ORs.
-`vpextrw` instructions each contribute 2–4%.  `vpcmpgtb` unmap at 3.6%,
-`vextracti128` (lane split for second block) at 2.8%.  Cost is more
-distributed than SSE4.1 but the bit-pack cluster still leads.
+**simd256 decode** — scalar bit-pack bottleneck eliminated by pshufb scatter
+(+68% throughput).  Profiling not yet re-run after the scatter rewrite.
 
 ---
 
 ## 4. Open optimisation opportunities
 
-- **SIMD decode scatter:** profiling confirms the scalar u128 bit-pack
-  is the dominant cost in both `decode_sse41` (`shr` at 22.4%, single
-  hotspot) and `decode_avx2` (`vpextrw`/shift/`or` cluster).  Replacing
-  it with a `pshufb`-based scatter should push decode throughput toward
-  encode levels.
 - **AVX2 encode alphabet correction:** `vpaddb` at 20.8% is the top
   hotspot — the `+0x23` base offset add after the gap correction.  Together
   with `vpunpcklbw`/`vpackuswb` (interleave/pack) this sequence accounts

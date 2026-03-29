@@ -82,35 +82,71 @@ impl ScalarEncoder {
             }};
         }
 
-        // Main loop: consume 13 bytes at a time → 16 chars, no branch inside.
-        // 13 bytes = 104 bits = 8 × 13-bit groups, so nbits is always in a
-        // known state at block boundaries (carry from previous chunk included).
+        // Main loop: consume 13 bytes at a time → 8 × 13-bit groups → 16 chars.
+        //
+        // When nbits == 0 at block entry the emit positions are fully determined:
+        // after bytes 1, 3, 4, 6, 8, 9, 11, 12 (0-indexed).  We unroll with
+        // two macros — ingest_no_emit! and ingest_emit! — to eliminate all 13
+        // branch instructions per block.
+        //
+        // When nbits != 0 (chunked streaming with a carry from the previous
+        // chunk boundary) we fall through to the generic ingest! path instead.
+        macro_rules! ingest_no_emit {
+            ($b:expr) => {{
+                queue |= ($b as u32) << nbits;
+                nbits += 8;
+            }};
+        }
+        macro_rules! ingest_emit {
+            ($b:expr) => {{
+                queue |= ($b as u32) << nbits;
+                nbits += 8;
+                emit_group!();
+            }};
+        }
+        macro_rules! ingest {
+            ($b:expr) => {{
+                queue |= ($b as u32) << nbits;
+                nbits += 8;
+                if nbits >= 13 {
+                    emit_group!();
+                }
+            }};
+        }
+
         let mut i = 0usize;
         while i + 13 <= input.len() {
-            // Load 13 bytes into queue, emitting a group whenever we have ≥13 bits.
-            // nbits starts at 0..12 (carry from previous block or chunk).
-            macro_rules! ingest {
-                ($b:expr) => {{
-                    queue |= ($b as u32) << nbits;
-                    nbits += 8;
-                    if nbits >= 13 {
-                        emit_group!();
-                    }
-                }};
+            if nbits == 0 {
+                // Fast path: emit positions are fixed — no branches.
+                ingest_no_emit!(unsafe { *input.get_unchecked(i) });
+                ingest_emit!(unsafe { *input.get_unchecked(i + 1) });
+                ingest_no_emit!(unsafe { *input.get_unchecked(i + 2) });
+                ingest_emit!(unsafe { *input.get_unchecked(i + 3) });
+                ingest_emit!(unsafe { *input.get_unchecked(i + 4) });
+                ingest_no_emit!(unsafe { *input.get_unchecked(i + 5) });
+                ingest_emit!(unsafe { *input.get_unchecked(i + 6) });
+                ingest_no_emit!(unsafe { *input.get_unchecked(i + 7) });
+                ingest_emit!(unsafe { *input.get_unchecked(i + 8) });
+                ingest_emit!(unsafe { *input.get_unchecked(i + 9) });
+                ingest_no_emit!(unsafe { *input.get_unchecked(i + 10) });
+                ingest_emit!(unsafe { *input.get_unchecked(i + 11) });
+                ingest_emit!(unsafe { *input.get_unchecked(i + 12) });
+            } else {
+                // Slow path: carry from chunk boundary — use generic ingest.
+                ingest!(unsafe { *input.get_unchecked(i) });
+                ingest!(unsafe { *input.get_unchecked(i + 1) });
+                ingest!(unsafe { *input.get_unchecked(i + 2) });
+                ingest!(unsafe { *input.get_unchecked(i + 3) });
+                ingest!(unsafe { *input.get_unchecked(i + 4) });
+                ingest!(unsafe { *input.get_unchecked(i + 5) });
+                ingest!(unsafe { *input.get_unchecked(i + 6) });
+                ingest!(unsafe { *input.get_unchecked(i + 7) });
+                ingest!(unsafe { *input.get_unchecked(i + 8) });
+                ingest!(unsafe { *input.get_unchecked(i + 9) });
+                ingest!(unsafe { *input.get_unchecked(i + 10) });
+                ingest!(unsafe { *input.get_unchecked(i + 11) });
+                ingest!(unsafe { *input.get_unchecked(i + 12) });
             }
-            ingest!(unsafe { *input.get_unchecked(i) });
-            ingest!(unsafe { *input.get_unchecked(i + 1) });
-            ingest!(unsafe { *input.get_unchecked(i + 2) });
-            ingest!(unsafe { *input.get_unchecked(i + 3) });
-            ingest!(unsafe { *input.get_unchecked(i + 4) });
-            ingest!(unsafe { *input.get_unchecked(i + 5) });
-            ingest!(unsafe { *input.get_unchecked(i + 6) });
-            ingest!(unsafe { *input.get_unchecked(i + 7) });
-            ingest!(unsafe { *input.get_unchecked(i + 8) });
-            ingest!(unsafe { *input.get_unchecked(i + 9) });
-            ingest!(unsafe { *input.get_unchecked(i + 10) });
-            ingest!(unsafe { *input.get_unchecked(i + 11) });
-            ingest!(unsafe { *input.get_unchecked(i + 12) });
             i += 13;
         }
 

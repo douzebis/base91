@@ -243,31 +243,139 @@ pub(crate) unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> bo
     let vals = _mm_add_epi16(lo16, _mm_mullo_epi16(hi16, _mm_set1_epi16(91)));
 
     // -----------------------------------------------------------------------
-    // Step 3: Pack 8 × 13-bit values back into 13 bytes.
+    // Step 3: Scatter 8 × 13-bit values back into 13 bytes via SIMD.
     //
-    // Use _mm_extract_epi16 to read each group value, then bit-pack via
-    // a u128 accumulator (same approach as scalar; avoids complex scatter).
+    // The bit layout is the exact inverse of the encode pshufb+srli gather:
+    //   group k occupies output bits [k*13, k*13+12].
+    //   byte starts: (0,1,3,4,6,8,9,11), in-byte shifts: (0,5,2,7,4,1,6,3).
+    //
+    // Strategy (symmetric to encode's srli+blend+pshufb extract):
+    //   1. Widen vals (u16x8) to two u32x4 registers: lo_g (g0–g3), hi_g (g4–g7).
+    //   2. Left-shift each 32-bit lane by the group's in-byte bit offset, using
+    //      slli_epi32 + blend_epi16 (same blend masks as encode's srli+blend).
+    //   3. Within lo_shifted: bytes for adjacent groups overlap at shared output
+    //      bytes.  One pshufb aligns each "secondary contributor" to the same
+    //      byte slot as its "primary", then OR merges them.
+    //   4. A final pshufb scatters the merged bytes to output positions B0–B6
+    //      (lo) and B6–B12 (hi).
+    //   5. OR lo_scatter and hi_scatter; storeu 13 bytes.
+    //
+    // Overlap map (output byte ← prim_source | sec_source):
+    //   lo: B1←L[1]|L[4], B3←L[6]|L[8], B4←L[9]|L[12]
+    //   hi: B8←H[2]|H[4], B9←H[5]|H[8], B11←H[10]|H[12]
+    //   cross: B6←lo[14]|hi[0]  (handled by OR of lo_scatter and hi_scatter)
     // -----------------------------------------------------------------------
-    let g0 = _mm_extract_epi16(vals, 0) as u16;
-    let g1 = _mm_extract_epi16(vals, 1) as u16;
-    let g2 = _mm_extract_epi16(vals, 2) as u16;
-    let g3 = _mm_extract_epi16(vals, 3) as u16;
-    let g4 = _mm_extract_epi16(vals, 4) as u16;
-    let g5 = _mm_extract_epi16(vals, 5) as u16;
-    let g6 = _mm_extract_epi16(vals, 6) as u16;
-    let g7 = _mm_extract_epi16(vals, 7) as u16;
 
-    let bit_buf: u128 = (g0 as u128)
-        | ((g1 as u128) << 13)
-        | ((g2 as u128) << 26)
-        | ((g3 as u128) << 39)
-        | ((g4 as u128) << 52)
-        | ((g5 as u128) << 65)
-        | ((g6 as u128) << 78)
-        | ((g7 as u128) << 91);
+    // Widen u16x8 → two u32x4 (lo: g0-g3, hi: g4-g7).
+    let lo_g = _mm_cvtepu16_epi32(vals);
+    let hi_g = _mm_cvtepu16_epi32(_mm_srli_si128(vals, 8));
 
-    let bytes = bit_buf.to_le_bytes();
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, 13);
+    // Left-shift each lane by its group's in-byte bit offset.
+    // lo group shifts: lane0=0, lane1=5, lane2=2, lane3=7.
+    let lo_s0 = lo_g;
+    let lo_s5 = _mm_slli_epi32(lo_g, 5);
+    let lo_s2 = _mm_slli_epi32(lo_g, 2);
+    let lo_s7 = _mm_slli_epi32(lo_g, 7);
+    let lo_a = _mm_blend_epi16(lo_s0, lo_s5, 0x0C); // lane1 ← s5
+    let lo_b = _mm_blend_epi16(lo_a, lo_s2, 0x30); // lane2 ← s2
+    let lo_shifted = _mm_blend_epi16(lo_b, lo_s7, 0xC0); // lane3 ← s7
+
+    // hi group shifts: lane0=4, lane1=1, lane2=6, lane3=3.
+    let hi_s4 = _mm_slli_epi32(hi_g, 4);
+    let hi_s1 = _mm_slli_epi32(hi_g, 1);
+    let hi_s6 = _mm_slli_epi32(hi_g, 6);
+    let hi_s3 = _mm_slli_epi32(hi_g, 3);
+    let hi_a = _mm_blend_epi16(hi_s4, hi_s1, 0x0C);
+    let hi_b = _mm_blend_epi16(hi_a, hi_s6, 0x30);
+    let hi_shifted = _mm_blend_epi16(hi_b, hi_s3, 0xC0);
+
+    // Merge secondary contributors into primary byte slots.
+    //
+    // lo_shifted byte layout (L[n] = lo_shifted byte n):
+    //   L[0]=g0b0→B0, L[1]=g0b1→B1prim, L[4]=g1b0→B1sec,
+    //   L[5]=g1b1→B2, L[6]=g1b2→B3prim, L[8]=g2b0→B3sec,
+    //   L[9]=g2b1→B4prim, L[12]=g3b0→B4sec, L[13]=g3b1→B5, L[14]=g3b2→B6lo.
+    //
+    // Route secondaries to their primary slot: L[4]→pos1, L[8]→pos6, L[12]→pos9.
+    // _mm_set_epi8(b15,b14,...,b1,b0): 16 args, high byte first.
+    let sec_lo_shuf = _mm_set_epi8(
+        -1, -1, -1, -1, -1, -1,   // b15..b10: zero
+        12i8, // b9 ← L[12]
+        -1, -1,  // b8,b7: zero
+        8i8, // b6 ← L[8]
+        -1, -1, -1, -1,   // b5..b2: zero
+        4i8,  // b1 ← L[4]
+        -1i8, // b0: zero
+    );
+    let lo_merged = _mm_or_si128(lo_shifted, _mm_shuffle_epi8(lo_shifted, sec_lo_shuf));
+
+    // After merge, lo_merged has:
+    //   byte 0 = g0b0             → B0
+    //   byte 1 = g0b1 | g1b0     → B1 complete
+    //   byte 5 = g1b1             → B2
+    //   byte 6 = g1b2 | g2b0     → B3 complete
+    //   byte 9 = g2b1 | g3b0     → B4 complete
+    //   byte 13= g3b1             → B5
+    //   byte 14= g3b2             → B6 (lo contribution)
+    //
+    // Scatter lo_merged to output bytes B0-B6 (B7-B15 = 0x80).
+    let scatter_lo = _mm_set_epi8(
+        -1, -1, -1, -1, -1, -1, -1, -1, -1,   // b15..b7: zero
+        14i8, // b6 ← lo_merged[14] → B6
+        13i8, // b5 ← lo_merged[13] → B5
+        9i8,  // b4 ← lo_merged[9]  → B4
+        6i8,  // b3 ← lo_merged[6]  → B3
+        5i8,  // b2 ← lo_merged[5]  → B2
+        1i8,  // b1 ← lo_merged[1]  → B1
+        0i8,  // b0 ← lo_merged[0]  → B0
+    );
+    let lo_out = _mm_shuffle_epi8(lo_merged, scatter_lo);
+
+    // hi_shifted byte layout (H[n]):
+    //   H[0]=g4b0→B6hi, H[1]=g4b1→B7, H[2]=g4b2→B8prim,
+    //   H[4]=g5b0→B8sec, H[5]=g5b1→B9prim, H[8]=g6b0→B9sec,
+    //   H[9]=g6b1→B10, H[10]=g6b2→B11prim, H[12]=g7b0→B11sec, H[13]=g7b1→B12.
+    //
+    // Route secondaries: H[4]→pos2, H[8]→pos5, H[12]→pos10.
+    let sec_hi_shuf = _mm_set_epi8(
+        -1i8, -1i8, -1i8, -1i8, -1i8, // b15..b11: zero
+        12i8, // b10 ← H[12]
+        -1i8, -1i8, -1i8, -1i8, // b9..b6: zero
+        8i8,  // b5 ← H[8]
+        -1i8, -1i8, // b4,b3: zero
+        4i8,  // b2 ← H[4]
+        -1i8, -1i8, // b1,b0: zero
+    );
+    let hi_merged = _mm_or_si128(hi_shifted, _mm_shuffle_epi8(hi_shifted, sec_hi_shuf));
+
+    // After merge, hi_merged has:
+    //   byte 0  = g4b0   → B6 (hi contribution; ORed with lo_out[6] below)
+    //   byte 1  = g4b1   → B7
+    //   byte 2  = g4b2 | g5b0  → B8 complete
+    //   byte 5  = g5b1 | g6b0  → B9 complete
+    //   byte 9  = g6b1   → B10
+    //   byte 10 = g6b2 | g7b0  → B11 complete
+    //   byte 13 = g7b1   → B12
+    //
+    // Scatter hi_merged to output bytes B6-B12.
+    let scatter_hi = _mm_set_epi8(
+        -1, -1, -1,   // b15,b14,b13: zero
+        13i8, // b12 ← hi_merged[13] → B12
+        10i8, // b11 ← hi_merged[10] → B11
+        9i8,  // b10 ← hi_merged[9]  → B10
+        5i8,  // b9  ← hi_merged[5]  → B9
+        2i8,  // b8  ← hi_merged[2]  → B8
+        1i8,  // b7  ← hi_merged[1]  → B7
+        0i8,  // b6  ← hi_merged[0]  → B6
+        -1, -1, -1, -1, -1, -1, // b5..b0: zero
+    );
+    let hi_out = _mm_shuffle_epi8(hi_merged, scatter_hi);
+
+    // Combine and store 13 bytes.
+    let out128 = _mm_or_si128(lo_out, hi_out);
+    let mut tmp = [0u8; 16];
+    _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, out128);
+    std::ptr::copy_nonoverlapping(tmp.as_ptr(), output, 13);
 
     true
 }
@@ -416,48 +524,111 @@ pub(crate) unsafe fn decode_block_avx2(input: *const u8, output: *mut u8) -> boo
     let hi16 = _mm256_unpacklo_epi8(hi8_sep, zero);
     let vals = _mm256_add_epi16(lo16, _mm256_mullo_epi16(hi16, _mm256_set1_epi16(91)));
 
-    // Step 3: Pack 8 × 13-bit values per lane back into 13 bytes each.
-    // Extract the two 128-bit lanes and use the SSE4.1 scalar bit-pack.
+    // Step 3: Scatter 8 × 13-bit values per lane back into 13 bytes each.
+    // Extract the two 128-bit lanes and apply the same pshufb scatter as
+    // decode_block_sse41, independently to each lane.
     let lo128 = _mm256_castsi256_si128(vals);
     let hi128 = _mm256_extracti128_si256(vals, 1);
 
-    // Block 0 (low lane).
-    let g0 = _mm_extract_epi16(lo128, 0) as u16;
-    let g1 = _mm_extract_epi16(lo128, 1) as u16;
-    let g2 = _mm_extract_epi16(lo128, 2) as u16;
-    let g3 = _mm_extract_epi16(lo128, 3) as u16;
-    let g4 = _mm_extract_epi16(lo128, 4) as u16;
-    let g5 = _mm_extract_epi16(lo128, 5) as u16;
-    let g6 = _mm_extract_epi16(lo128, 6) as u16;
-    let g7 = _mm_extract_epi16(lo128, 7) as u16;
-    let buf0: u128 = (g0 as u128)
-        | ((g1 as u128) << 13)
-        | ((g2 as u128) << 26)
-        | ((g3 as u128) << 39)
-        | ((g4 as u128) << 52)
-        | ((g5 as u128) << 65)
-        | ((g6 as u128) << 78)
-        | ((g7 as u128) << 91);
-    std::ptr::copy_nonoverlapping(buf0.to_le_bytes().as_ptr(), output, 13);
+    // Shared shuffle/scatter constants (same as decode_block_sse41).
+    let sec_lo_shuf = _mm_set_epi8(
+        -1, -1, -1, -1, -1, -1,   // b15..b10: zero
+        12i8, // b9  ← L[12]
+        -1, -1,  // b8,b7: zero
+        8i8, // b6  ← L[8]
+        -1, -1, -1, -1,   // b5..b2: zero
+        4i8,  // b1  ← L[4]
+        -1i8, // b0:  zero
+    );
+    let scatter_lo = _mm_set_epi8(
+        -1, -1, -1, -1, -1, -1, -1, -1, -1,   // b15..b7: zero
+        14i8, // b6 ← lo_merged[14] → B6
+        13i8, // b5 ← lo_merged[13] → B5
+        9i8,  // b4 ← lo_merged[9]  → B4
+        6i8,  // b3 ← lo_merged[6]  → B3
+        5i8,  // b2 ← lo_merged[5]  → B2
+        1i8,  // b1 ← lo_merged[1]  → B1
+        0i8,  // b0 ← lo_merged[0]  → B0
+    );
+    let sec_hi_shuf = _mm_set_epi8(
+        -1i8, -1i8, -1i8, -1i8, -1i8, // b15..b11: zero
+        12i8, // b10 ← H[12]
+        -1i8, -1i8, -1i8, -1i8, // b9..b6: zero
+        8i8,  // b5  ← H[8]
+        -1i8, -1i8, // b4,b3: zero
+        4i8,  // b2  ← H[4]
+        -1i8, -1i8, // b1,b0: zero
+    );
+    let scatter_hi = _mm_set_epi8(
+        -1, -1, -1,   // b15,b14,b13: zero
+        13i8, // b12 ← hi_merged[13] → B12
+        10i8, // b11 ← hi_merged[10] → B11
+        9i8,  // b10 ← hi_merged[9]  → B10
+        5i8,  // b9  ← hi_merged[5]  → B9
+        2i8,  // b8  ← hi_merged[2]  → B8
+        1i8,  // b7  ← hi_merged[1]  → B7
+        0i8,  // b6  ← hi_merged[0]  → B6
+        -1, -1, -1, -1, -1, -1, // b5..b0: zero
+    );
 
-    // Block 1 (high lane).
-    let h0 = _mm_extract_epi16(hi128, 0) as u16;
-    let h1 = _mm_extract_epi16(hi128, 1) as u16;
-    let h2 = _mm_extract_epi16(hi128, 2) as u16;
-    let h3 = _mm_extract_epi16(hi128, 3) as u16;
-    let h4 = _mm_extract_epi16(hi128, 4) as u16;
-    let h5 = _mm_extract_epi16(hi128, 5) as u16;
-    let h6 = _mm_extract_epi16(hi128, 6) as u16;
-    let h7 = _mm_extract_epi16(hi128, 7) as u16;
-    let buf1: u128 = (h0 as u128)
-        | ((h1 as u128) << 13)
-        | ((h2 as u128) << 26)
-        | ((h3 as u128) << 39)
-        | ((h4 as u128) << 52)
-        | ((h5 as u128) << 65)
-        | ((h6 as u128) << 78)
-        | ((h7 as u128) << 91);
-    std::ptr::copy_nonoverlapping(buf1.to_le_bytes().as_ptr(), output.add(13), 13);
+    // Scatter helper: apply the same logic as decode_block_sse41 Step 3
+    // to a u16x8 register and store 13 bytes at `dst`.
+    #[inline(always)]
+    unsafe fn scatter128(
+        v: __m128i,
+        sec_lo_shuf: __m128i,
+        scatter_lo: __m128i,
+        sec_hi_shuf: __m128i,
+        scatter_hi: __m128i,
+        dst: *mut u8,
+    ) {
+        let lo_g = _mm_cvtepu16_epi32(v);
+        let hi_g = _mm_cvtepu16_epi32(_mm_srli_si128(v, 8));
+
+        let lo_s0 = lo_g;
+        let lo_s5 = _mm_slli_epi32(lo_g, 5);
+        let lo_s2 = _mm_slli_epi32(lo_g, 2);
+        let lo_s7 = _mm_slli_epi32(lo_g, 7);
+        let lo_a = _mm_blend_epi16(lo_s0, lo_s5, 0x0C);
+        let lo_b = _mm_blend_epi16(lo_a, lo_s2, 0x30);
+        let lo_shifted = _mm_blend_epi16(lo_b, lo_s7, 0xC0);
+
+        let hi_s4 = _mm_slli_epi32(hi_g, 4);
+        let hi_s1 = _mm_slli_epi32(hi_g, 1);
+        let hi_s6 = _mm_slli_epi32(hi_g, 6);
+        let hi_s3 = _mm_slli_epi32(hi_g, 3);
+        let hi_a = _mm_blend_epi16(hi_s4, hi_s1, 0x0C);
+        let hi_b = _mm_blend_epi16(hi_a, hi_s6, 0x30);
+        let hi_shifted = _mm_blend_epi16(hi_b, hi_s3, 0xC0);
+
+        let lo_merged = _mm_or_si128(lo_shifted, _mm_shuffle_epi8(lo_shifted, sec_lo_shuf));
+        let lo_out = _mm_shuffle_epi8(lo_merged, scatter_lo);
+
+        let hi_merged = _mm_or_si128(hi_shifted, _mm_shuffle_epi8(hi_shifted, sec_hi_shuf));
+        let hi_out = _mm_shuffle_epi8(hi_merged, scatter_hi);
+
+        let out128 = _mm_or_si128(lo_out, hi_out);
+        let mut tmp = [0u8; 16];
+        _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, out128);
+        std::ptr::copy_nonoverlapping(tmp.as_ptr(), dst, 13);
+    }
+
+    scatter128(
+        lo128,
+        sec_lo_shuf,
+        scatter_lo,
+        sec_hi_shuf,
+        scatter_hi,
+        output,
+    );
+    scatter128(
+        hi128,
+        sec_lo_shuf,
+        scatter_lo,
+        sec_hi_shuf,
+        scatter_hi,
+        output.add(13),
+    );
 
     true
 }
