@@ -46,7 +46,7 @@ pyo3-stub-gen-derive = { version = "0.20", optional = true }
 
 [dev-dependencies]
 criterion  = { version = "0.5", features = ["html_reports"] }
-rand       = "0.8"
+rand       = { version = "0.8", features = ["small_rng"] }
 sha2       = "0.10"
 base91-dnsl48 = { package = "base91", version = "0.1" }
 
