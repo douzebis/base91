@@ -6,10 +6,10 @@ SPDX-License-Identifier: MIT
 
 # basE91 Performance Analysis
 
-Machine: Intel Core Ultra 7 165U, CPU-pinned VCPUs at 2688 MHz (E-cores).
+Machine: Intel Core Ultra 7 165U, pinned to P-cores 0+2 (no HT sibling contention).
 Compilers: rustc 1.91.1 (LLVM), clang 21.1.7.
 Bench tool: Criterion (100 samples, 1 MiB deterministic input, seed 0xdeadbeef_cafebabe).
-Measured at commit ad07897.
+Measured at commit e30b49e.
 
 ---
 
@@ -78,9 +78,9 @@ Key fixes required to reach this state:
 
 | Implementation | Encode | Decode |
 |---|---|---|
-| Rust `encode_unchecked` | ~719 MiB/s | ~720 MiB/s |
-| Rust `encode` (safe, `spare_capacity_mut`) | ~519 MiB/s | ~572 MiB/s |
-| base91 v0.1.0 (dnsl48) | ~409 MiB/s | ~527 MiB/s |
+| Rust `encode_unchecked` | ~993 MiB/s | ~1.15 GiB/s |
+| Rust `encode` (safe, `spare_capacity_mut`) | ~841 MiB/s | ~872 MiB/s |
+| base91 v0.1.0 (dnsl48) | ~624 MiB/s | ~784 MiB/s |
 
 The safe API uses `spare_capacity_mut` + `set_len` to keep `ptr`
 register-resident — `Vec::push` forces LLVM to spill and reload the
@@ -92,23 +92,27 @@ pointer because `grow_one()` may reallocate.
 
 | % | Instruction | Role |
 |---|---|---|
-| 5.7 | `movzbl (%rdi,%r10),%r9d` | load input byte |
-| 5.3 | `or %r11d,%r9d` | accumulate byte into queue |
-| 5.3 | `cmp $0x5,%ecx` / `jbe` | check nbits ≥ 6 |
-| 5.2 | `shl %cl,%r9d` | variable shift into queue |
-| 4.8 | `mov %r9d,%r11d` | save queue snapshot |
-| 3.5 | `imul $0xb41,%r11d,%ebx` | multiply-shift divide by 91 |
-| 3.1 | `shr $0x12,%ebx` | complete the divide |
+| 10.7 | `imul $0xb41,%r11d,%ebx` | multiply-shift divide by 91 |
+| 10.5 | `or %r11d,%r9d` | accumulate byte into queue |
+| 10.2 | `shr $0x12,%ebx` | complete the divide |
+| 7.6 | `mov %r11b,(%rdx,%rax)` | write lo output char |
+| 7.5 | `jmp cdab` | jump to table lookup |
+| 6.7 | `movzbl (%rbx,%r8),%r11d` | table lookup hi char |
+| 5.0 | `cmp $0x5,%ecx` / `jbe` | check nbits ≥ 6 |
+| 4.6 | `shl %cl,%r9d` | variable shift into queue |
 
-Samples spread across the whole loop body with no single dominant instruction.
-The `shl %cl` (variable-count shift, 3-cycle latency) and `or` form the
-loop-carried queue dependency; the `imul`/`shr` divide-by-91 runs in parallel.
+The `imul`/`shr` divide-by-91 (21% combined) and the `or` queue
+accumulation (10.5%) are the dominant costs.  The `shl %cl` variable-count
+shift has 3-cycle latency and forms the loop-carried queue dependency
+(`or → shl → or`), but the `imul` running in parallel accounts for similar
+sample weight.
 
-**Decode** — 99% in `decode_unchecked`.  Samples similarly spread;
-no instruction above 3.2%.  The `shl %cl,%r10d` (variable shift) and
-`or %r9d,%r10d` (~2.6–2.9% each) form the same serial queue dependency.
-The two-scanner loop eliminates the `val` sentinel branch, leaving the
-shift chain as the primary constraint.
+**Decode** — 99% in `decode_unchecked`.  Top: `or %r9d,%r10d` (7.8%,
+accumulate val into queue), `adc $0xffffffff,%r11d` (5.1%, branchless
+13/14-bit select), `mov %r10b,(%rdx,%rax)` (4.7%, write output byte),
+`lea 0x1(%rax),%rbx` (4.6%), `lea 0x6(%r11),%ecx` (3.4%).  The `shl %cl`
+variable shift (3.5%) and `or` form the same serial queue dependency as
+in encode.
 
 **Scalar fixed-width encode is faster than Henke** despite more arithmetic
 per output byte.  `perf annotate` shows samples spread across all 8 unrolled
@@ -157,49 +161,52 @@ Decode throughput is measured on encoded bytes (encoded ≈ 1.23× input).
 
 | Path | Encode | Decode |
 |---|---|---|
-| scalar fixed-width | ~767 MiB/s | ~1.04 GiB/s |
-| simd128 (SSE4.1)   | ~2.91 GiB/s | ~2.61 GiB/s |
-| simd256 (AVX2)     | ~2.99 GiB/s | ~3.42 GiB/s |
-| Henke `encode_unchecked` (reference) | ~719 MiB/s | ~720 MiB/s |
+| scalar fixed-width | ~1.03 GiB/s | ~1.54 GiB/s |
+| simd128 (SSE4.1)   | ~4.26 GiB/s | ~4.78 GiB/s |
+| simd256 (AVX2)     | ~7.66 GiB/s | ~5.12 GiB/s |
+| Henke `encode_unchecked` (reference) | ~993 MiB/s | ~1.15 GiB/s |
 
 ### 3.4 Observations
 
-**Encode: simd256 ≈ simd128** (~2.99 vs ~2.91 GiB/s, within noise) on
-pinned 2688 MHz E-cores.  These cores likely throttle AVX2 throughput —
-the wide 256-bit path gains nothing over SSE4.1 at this frequency.
-Profiling (§3.5) shows the dominant cost is `vpmullw`/`vpaddw` (25% combined)
-for the divide-by-91, not the memory bandwidth or shuffle pipeline.
+**Encode: simd256 is ~1.8× simd128** (~7.66 vs ~4.26 GiB/s) on P-cores
+with full-width AVX2 execution.  Each AVX2 iteration processes two 13-byte
+blocks, roughly halving iteration count vs SSE4.1.
 
-**Decode: simd256 > simd128** (~3.42 vs ~2.61 GiB/s).  The AVX2 path
-processes 32 chars per iteration before the scalar bit-pack, so two
-bit-packs amortise the wider SIMD unmap better at this clock speed.
+**Decode: simd256 > simd128** (~5.12 vs ~4.78 GiB/s).  Both kernels unmap
+in hardware then fall through to a scalar bit-pack.  The AVX2 path processes
+32 chars per iteration so two bit-packs amortise the wider unmap.
 
 **Scalar fixed-width outperforms Henke on both encode and decode.**
-Encode: ~767 MiB/s vs ~719 MiB/s.  Decode: ~1.04 GiB/s vs ~720 MiB/s.
+Encode: ~1.03 GiB/s vs ~993 MiB/s.  Decode: ~1.54 GiB/s vs ~1.15 GiB/s.
 See §2.4 for the Henke bottleneck analysis.
 
 ### 3.5 Profiling: SIMD hotspots (`perf record -e cpu-clock`)
 
-**simd128 encode** — 94% of samples in `encode_sse41`.  Samples spread
-across the pipeline: `add %rbx` (loop counter, 8.8%), `paddb` (3.7%),
-`movdqa` (2.9%), `movdqu` store (4.1%), `psubb` (2.9%), `pblendw` (2.5%).
-No single dominant bottleneck — pipeline is reasonably balanced.
+**simd128 encode** — 94% in `encode_sse41`.  Top: `paddb` (19.2%),
+`psubb` (9.6%), `movdqa` (8.7%), `packusdw` (7.3%), `packuswb` (7.9%),
+`psrld` (2.6%).  The `paddb`/`psubb` pair implements the alphabet gap
+correction and dominates.  No single-instruction bottleneck; pipeline is
+reasonably balanced across the encode stages.
 
 **simd128 decode** — 96% in `decode_sse41`.  Single dominant hotspot:
-`shr $0xc,%r8d` at **22.4%**, followed by `pextrw $0x3,%xmm5,%ebx` at
-**11.2%**.  Both are in the scalar u128 bit-pack reconstructing 13 bytes
-from 8 pextrw/shift/or operations.  The bit-pack is the clear bottleneck.
+`or %r8d,%r9d` at **29.4%**, followed by `or %r9,%r12` at **7.6%** and
+`pextrw $0x1,%xmm5,%r9d` at **5.4%**.  All three are in the scalar u128
+bit-pack.  The bit-pack is the clear bottleneck; the SIMD unmap phase
+(`movdqa`, `paddb`, `pmullw`) accounts for the remaining ~30% spread across
+multiple instructions.
 
-**simd256 encode** — 95% in `encode_avx2`.  Two instructions tie at
-**12.6%** each: `vpmullw` and `vpaddw` — the paired multiply-add that
-implements divide-by-91 in SIMD.  These have latency ≥4 cycles and form
-a dependency chain.  `add %rbx` loop counter at 7.4%, `vpunpcklbw` at
-4.3%, `vpcmpgtb`/`vpsubb` gap correction at 4.1%/3.8%.
+**simd256 encode** — 95% in `encode_avx2`.  Top: `vpaddb` (20.8%),
+`vpunpcklbw` (10.6%), `vpaddw` (11.1%), `vpackuswb` (7.2%+),
+`vinserti128` (5.7%), `vpmullw` (4.3%).  The `vpaddb`/`vpaddw` pair
+(alphabet correction + div-91 add) dominates.  `vpmullw` itself is only
+4.3% — the multiply is not the bottleneck; the dependent `vpaddw` absorbs
+the latency cost.
 
-**simd256 decode** — 96% in `decode_avx2`.  `test %r8d,%r8d` (invalid
-character check) at **6.3%**, `vpcmpgtb` unmap at 2.8%, then a cluster
-of `vpextrw`/shift/`or` for two bit-packs (3–5% each).  Compared to the
-SSE4.1 case the bottleneck is more distributed across the two bit-packs.
+**simd256 decode** — 96% in `decode_avx2`.  `or %ebx,%r12d` at **8.7%**
+and `or %ebx,%r12d` (second block) at **3.9%** are the bit-pack ORs.
+`vpextrw` instructions each contribute 2–4%.  `vpcmpgtb` unmap at 3.6%,
+`vextracti128` (lane split for second block) at 2.8%.  Cost is more
+distributed than SSE4.1 but the bit-pack cluster still leads.
 
 ---
 
@@ -210,9 +217,11 @@ SSE4.1 case the bottleneck is more distributed across the two bit-packs.
   hotspot) and `decode_avx2` (`vpextrw`/shift/`or` cluster).  Replacing
   it with a `pshufb`-based scatter should push decode throughput toward
   encode levels.
-- **AVX2 encode divide-by-91:** `vpmullw`/`vpaddw` tie at 12.6% each —
-  the multiply-add dependency chain for div-91.  An alternative with fewer
-  dependent ops (e.g. `vpmulhuw` alone or a reciprocal multiply) may help.
+- **AVX2 encode alphabet correction:** `vpaddb` at 20.8% is the top
+  hotspot — the `+0x23` base offset add after the gap correction.  Together
+  with `vpunpcklbw`/`vpackuswb` (interleave/pack) this sequence accounts
+  for ~40% of samples.  Restructuring the output layout to avoid the
+  interleave step could reduce this cost.
 - **NEON / SVE2:** aarch64 kernels not yet implemented or benchmarked.
 - **`enc_char` / `dec_char` peephole:** LLVM emits `cmp; adc $-1; lea`
   (3 instructions) instead of the optimal `cmp; sbb $0xDC` (2 instructions)
