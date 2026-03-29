@@ -129,16 +129,19 @@ work to schedule between each group emission.
 ### 3.1 Design
 
 The SIMD variant uses fixed-width 13-bit groups (8 groups per 13-byte
-block → 16 output chars) and a contiguous 91-char alphabet (0x23–0x5B,
-0x5D–0x7E, omitting `\`).  The leading `-` byte distinguishes SIMD
+block → 16 output chars) and a contiguous 91-char alphabet (0x23–0x26,
+0x28–0x7E, omitting `'`).  The leading `-` byte distinguishes SIMD
 streams from Henke streams.
 
 The scalar path uses the same block structure as the SIMD kernels: 16-byte
 decode blocks with an optional `\n` skip at each boundary, and 13-byte
 encode blocks unrolled 8 pairs deep with `spare_capacity_mut` output.
 
-`dec_char` uses branchless arithmetic: `b.wrapping_sub(0x23).wrapping_sub((b > 0x5C) as u8)` —
-three instructions (`cmp $0x5D; adc $-1; lea -35`).
+`dec_char` uses branchless arithmetic: `b.wrapping_sub(0x23).wrapping_sub((b > 0x26) as u8)` —
+three instructions (`cmp $0x27; adc $-1; lea -35`).
+
+The alphabet omits `'` (0x27) rather than `\` (0x5C), so SIMD-encoded
+output is safe to single-quote in any POSIX shell without escaping.
 
 **Input validity:** all decode paths (scalar, SSE4.1, AVX2, NEON) assume
 well-formed input.  Non-alphabet bytes (other than an optional `\n` at each
@@ -152,7 +155,8 @@ contains only SIMD-alphabet characters.
 `pshufb` gathers bit-group bytes into 32-bit lanes; four `psrld` +
 `pblendw` blends select the right shift per group; `pmulhuw` + `pmullw`
 divide by 91; `pshufb` + `punpcklbw` interleave lo/hi indices;
-`paddb` + `pcmpgtb` + `psubb` apply the alphabet gap correction.
+`paddb` + `pcmpgtb(> 0x26)` + `psubb` apply the alphabet gap correction
+(skip `'` at 0x27).
 
 Decode reverses this: character unmap via `pcmpgtb` + `paddb`, validation
 via `pcmpgtb`, then `pshufb` to separate lo/hi, `pmullw` to reconstruct

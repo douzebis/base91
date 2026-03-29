@@ -159,14 +159,14 @@ pub(crate) unsafe fn encode_block_neon(input: *const u8, output: *mut u8) {
 
     // -----------------------------------------------------------------------
     // Step 4: Map indices 0–90 to SIMD-alphabet characters.
-    //   indices 0–56  → 0x23 + index
-    //   indices 57–90 → 0x24 + index  (skip 0x5C = '\')
-    // Add 0x23, then subtract cmpgt mask (0xFF where > 0x5B) to add 1.
+    //   indices 0–3   → 0x23 + index
+    //   indices 4–90  → 0x24 + index  (skip 0x27 = '\'')
+    // Add 0x23, then subtract cmpgt mask (0xFF where > 0x26) to add 1.
     // -----------------------------------------------------------------------
     let base = vdupq_n_u8(0x23);
     let chars = vaddq_u8(interleaved, base);
-    let threshold = vdupq_n_u8(0x5B);
-    let needs_bump = vcgtq_u8(chars, threshold); // 0xFF where > 0x5B
+    let threshold = vdupq_n_u8(0x26);
+    let needs_bump = vcgtq_u8(chars, threshold); // 0xFF where > 0x26
     let corrected = vsubq_u8(chars, needs_bump); // subtract 0xFF = add 1
 
     vst1q_u8(output, corrected);
@@ -185,16 +185,16 @@ pub(crate) unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> boo
 
     // -----------------------------------------------------------------------
     // Step 1: Reverse map characters to indices 0–90.
-    //   chars 0x23–0x5B: index = char - 0x23
-    //   chars 0x5D–0x7E: index = char - 0x24  (= (char - 0x23) - 1)
-    // needs_bump = 0xFF where char > 0x5B; subtracting 0xFF adds 1.
+    //   chars 0x23–0x26: index = char - 0x23
+    //   chars 0x28–0x7E: index = char - 0x24  (= (char - 0x23) - 1)
+    // needs_bump = 0xFF where char > 0x26; subtracting 0xFF adds 1.
     // index = (char - 0x23) + needs_bump   (needs_bump is 0xFF = -1 in u8)
     // -----------------------------------------------------------------------
     let base = vdupq_n_u8(0x23);
-    let threshold = vdupq_n_u8(0x5B);
-    let needs_bump = vcgtq_u8(chars, threshold); // 0xFF where > 0x5B
+    let threshold = vdupq_n_u8(0x26);
+    let needs_bump = vcgtq_u8(chars, threshold); // 0xFF where > 0x26
     let raw = vsubq_u8(chars, base);
-    let indices8 = vaddq_u8(raw, needs_bump); // subtracts 1 where > 0x5B
+    let indices8 = vaddq_u8(raw, needs_bump); // subtracts 1 where > 0x26
 
     // Validate: all indices must be ≤ 90.
     let max_valid = vdupq_n_u8(90);

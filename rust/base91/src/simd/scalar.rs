@@ -8,7 +8,7 @@
 //! and also the reference for correctness testing of the SIMD kernels.
 //!
 //! Wire format: one leading `-` byte, then fixed-width 13-bit groups encoded
-//! two characters each using the SIMD alphabet (0x23–0x5B, 0x5D–0x7E).
+//! two characters each using the SIMD alphabet (0x23–0x26, 0x28–0x7E).
 
 // ---------------------------------------------------------------------------
 // Alphabet helpers
@@ -16,15 +16,15 @@
 
 /// Encode an index 0–90 to a SIMD-alphabet character.
 ///
-/// Alphabet: 0x23–0x5B (indices 0–56) then 0x5D–0x7E (indices 57–90).
-/// The gap at 0x5C (`\`) is bridged by adding 1 for the upper range.
+/// Alphabet: 0x23–0x26 (indices 0–3) then 0x28–0x7E (indices 4–90).
+/// The gap at 0x27 (`'`) is bridged by adding 1 for the upper range.
 #[inline(always)]
 pub(crate) fn enc_char(idx: u8) -> u8 {
     debug_assert!(idx < 91);
-    if idx < 57 {
+    if idx < 4 {
         idx + 0x23
     } else {
-        idx + 0x24 // skip 0x5C (`\`)
+        idx + 0x24 // skip 0x27 (`'`)
     }
 }
 
@@ -32,8 +32,8 @@ pub(crate) fn enc_char(idx: u8) -> u8 {
 #[cfg(test)]
 fn dec_char(b: u8) -> Option<u8> {
     match b {
-        0x23..=0x5B => Some(b - 0x23),
-        0x5D..=0x7E => Some(b - 0x24),
+        0x23..=0x26 => Some(b - 0x23),
+        0x28..=0x7E => Some(b - 0x24),
         _ => None,
     }
 }
@@ -252,7 +252,7 @@ impl ScalarDecoder {
         macro_rules! idx {
             ($b:expr) => {{
                 let b = $b as u32;
-                b.wrapping_sub(0x23).wrapping_sub((b > 0x5C) as u32)
+                b.wrapping_sub(0x23).wrapping_sub((b > 0x26) as u32)
             }};
         }
 
@@ -471,8 +471,8 @@ mod tests {
     }
 
     #[test]
-    fn backslash_not_in_alphabet() {
-        assert_eq!(dec_char(b'\\'), None);
+    fn single_quote_not_in_alphabet() {
+        assert_eq!(dec_char(b'\''), None);
     }
 
     #[test]

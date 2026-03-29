@@ -13,9 +13,9 @@
 //!
 //! # Alphabet
 //!
-//! 91 consecutive printable ASCII characters omitting only `\` (0x5C):
-//! - 0x23–0x5B (57 chars): `#$%&'()*+,-./0-9:;<=>?@A-Z[`
-//! - 0x5D–0x7E (34 chars): `]^_`a-z{|}~`
+//! 91 consecutive printable ASCII characters omitting only `'` (0x27):
+//! - 0x23–0x26  (4 chars): `#$%&`
+//! - 0x28–0x7E (87 chars): `()*+,-./0-9:;<=>?@A-Z[\]^_`a-z{|}~`
 //!
 //! # Runtime dispatch
 //!

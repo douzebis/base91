@@ -58,7 +58,8 @@ on the safe API.  The unchecked API reaches **~1.59× / ~1.47×**.
 Uses a non-Henke, fixed-width 13-bit block layout that makes the block
 boundaries predictable — unlocking SIMD parallelism that is impossible on
 the Henke path.  The encoded stream is prefixed with `-` to distinguish it
-from Henke output.
+from Henke output.  The alphabet (0x23–0x26, 0x28–0x7E) omits `'` so
+output is safe to single-quote in any POSIX shell.
 
 | Path | Encode | Decode | vs. Henke unchecked |
 |---|---|---|---|

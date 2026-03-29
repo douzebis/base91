@@ -25,9 +25,9 @@
 //!
 //! # Alphabet gap correction
 //!
-//! The SIMD alphabet skips `\` (0x5C). Encode: add 0x23 to each index,
-//! then add 1 for indices ≥ 57 (bytes that would land at 0x5C or above).
-//! In SIMD: `_mm_cmpgt_epi8(chars, 0x5B)` gives 0xFF where correction
+//! The SIMD alphabet skips `'` (0x27). Encode: add 0x23 to each index,
+//! then add 1 for indices ≥ 4 (bytes that would land at 0x27 or above).
+//! In SIMD: `_mm_cmpgt_epi8(chars, 0x26)` gives 0xFF where correction
 //! needed; subtracting that mask adds 1 (since 0 − 0xFF = 1 mod 256).
 //!
 //! # Bit extraction
@@ -173,14 +173,14 @@ pub(crate) unsafe fn encode_block_sse41(input: *const u8, output: *mut u8) {
 
     // -----------------------------------------------------------------------
     // Step 4: Map indices 0–90 to SIMD-alphabet characters.
-    //   indices 0–56  → 0x23 + index
-    //   indices 57–90 → 0x24 + index  (skip 0x5C = '\')
-    // Add 0x23 to all, then subtract the cmpgt mask (0xFF where > 0x5B)
+    //   indices 0–3   → 0x23 + index
+    //   indices 4–90  → 0x24 + index  (skip 0x27 = '\'')
+    // Add 0x23 to all, then subtract the cmpgt mask (0xFF where > 0x26)
     // which is equivalent to adding 1 for those positions.
     // -----------------------------------------------------------------------
     let base = _mm_set1_epi8(0x23u8 as i8);
     let chars = _mm_add_epi8(interleaved, base);
-    let threshold = _mm_set1_epi8(0x5Bu8 as i8);
+    let threshold = _mm_set1_epi8(0x26u8 as i8);
     let needs_bump = _mm_cmpgt_epi8(chars, threshold);
     let corrected = _mm_sub_epi8(chars, needs_bump);
 
@@ -201,18 +201,18 @@ pub(crate) unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> bo
 
     // -----------------------------------------------------------------------
     // Step 1: Reverse map: characters → indices 0–90.
-    //   chars 0x23–0x5B: index = char - 0x23
-    //   chars 0x5D–0x7E: index = char - 0x24
-    // Equivalent: index = (char - 0x23) - bump, where bump=1 if char > 0x5B.
+    //   chars 0x23–0x26: index = char - 0x23
+    //   chars 0x28–0x7E: index = char - 0x24
+    // Equivalent: index = (char - 0x23) - bump, where bump=1 if char > 0x26.
     // _mm_cmpgt_epi8 returns 0xFF (= -1) where true, 0 elsewhere.
     // Subtracting 0xFF = adding 1, so we need to ADD the mask (not subtract).
     // But 0xFF = -1 in i8, so adding 0xFF subtracts 1. That's what we want!
     // index = (char - 0x23) + needs_bump  where needs_bump = 0xFF = -1 for bump lanes.
     // -----------------------------------------------------------------------
-    let threshold = _mm_set1_epi8(0x5Bu8 as i8);
-    let needs_bump = _mm_cmpgt_epi8(chars, threshold); // 0xFF (-1) where > 0x5B
+    let threshold = _mm_set1_epi8(0x26u8 as i8);
+    let needs_bump = _mm_cmpgt_epi8(chars, threshold); // 0xFF (-1) where > 0x26
     let raw = _mm_sub_epi8(chars, _mm_set1_epi8(0x23u8 as i8));
-    let indices8 = _mm_add_epi8(raw, needs_bump); // subtracts 1 where > 0x5B
+    let indices8 = _mm_add_epi8(raw, needs_bump); // subtracts 1 where > 0x26
 
     // Validate: indices must be 0–90. Values that were out of alphabet
     // will have wrapped or be > 90.
@@ -479,7 +479,7 @@ pub(crate) unsafe fn encode_block_avx2(input: *const u8, output: *mut u8) {
     // Step 4: Map to SIMD-alphabet.
     let base = _mm256_set1_epi8(0x23u8 as i8);
     let chars = _mm256_add_epi8(interleaved, base);
-    let threshold = _mm256_set1_epi8(0x5Bu8 as i8);
+    let threshold = _mm256_set1_epi8(0x26u8 as i8);
     let needs_bump = _mm256_cmpgt_epi8(chars, threshold);
     let corrected = _mm256_sub_epi8(chars, needs_bump);
 
@@ -498,7 +498,7 @@ pub(crate) unsafe fn decode_block_avx2(input: *const u8, output: *mut u8) -> boo
     let chars = _mm256_loadu_si256(input as *const __m256i);
 
     // Step 1: Reverse map characters → indices 0–90.
-    let threshold = _mm256_set1_epi8(0x5Bu8 as i8);
+    let threshold = _mm256_set1_epi8(0x26u8 as i8);
     let needs_bump = _mm256_cmpgt_epi8(chars, threshold);
     let raw = _mm256_sub_epi8(chars, _mm256_set1_epi8(0x23u8 as i8));
     let indices8 = _mm256_add_epi8(raw, needs_bump);
