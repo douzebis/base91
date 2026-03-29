@@ -10,7 +10,8 @@ Machine: Intel Core Ultra 7 165U, pinned to P-cores 0+2 (no HT sibling contentio
 Compilers: rustc 1.91.1 (LLVM), clang 21.1.7.
 Bench tool: Criterion (100 samples, 1 MiB deterministic input, seed 0xdeadbeef_cafebabe).
 Bench numbers in §2 measured at commit e30b49e.
-Bench numbers in §3 measured at commit 069742d (pshufb scatter + branch elimination + direct store).
+Bench numbers in §3 measured across commits 69ae4c9–069742d
+(pshufb scatter + branch elimination; direct store measured separately).
 
 ---
 
@@ -87,7 +88,7 @@ The safe API uses `spare_capacity_mut` + `set_len` to keep `ptr`
 register-resident — `Vec::push` forces LLVM to spill and reload the
 pointer because `grow_one()` may reallocate.
 
-### 2.4 Profiling: Henke hotspots (`perf record -e cpu-clock`)
+### 2.4 Profiling: Henke hotspots (samply / perf record)
 
 **Encode** — 99% of samples in `encode_unchecked`.  Top instructions:
 
@@ -139,15 +140,15 @@ encode blocks unrolled 8 pairs deep with `spare_capacity_mut` output.
 `dec_char` uses branchless arithmetic: `b.wrapping_sub(0x23).wrapping_sub((b > 0x5C) as u8)` —
 three instructions (`cmp $0x5D; adc $-1; lea -35`).
 
-**Input validity:** all three decode paths (scalar, SSE4.1, AVX2) assume
+**Input validity:** all decode paths (scalar, SSE4.1, AVX2, NEON) assume
 well-formed input.  Non-alphabet bytes (other than an optional `\n` at each
 16-char block boundary) silently corrupt the decoded output rather than
 returning an error.  Callers are responsible for ensuring the input stream
 contains only SIMD-alphabet characters.
 
-### 3.2 SIMD kernels (x86_64)
+### 3.2 SIMD kernels
 
-**SSE4.1** (13 bytes → 16 chars per call, 128-bit XMM):
+**SSE4.1 / x86_64** (13 bytes → 16 chars per call, 128-bit XMM):
 `pshufb` gathers bit-group bytes into 32-bit lanes; four `psrld` +
 `pblendw` blends select the right shift per group; `pmulhuw` + `pmullw`
 divide by 91; `pshufb` + `punpcklbw` interleave lo/hi indices;
@@ -155,12 +156,27 @@ divide by 91; `pshufb` + `punpcklbw` interleave lo/hi indices;
 
 Decode reverses this: character unmap via `pcmpgtb` + `paddb`, validation
 via `pcmpgtb`, then `pshufb` to separate lo/hi, `pmullw` to reconstruct
-`val = lo + hi*91`, then a scalar u128 bit-pack to reconstruct 13 bytes.
+`val = lo + hi*91`, then `slli_epi32` + `blend` left-shifts each 13-bit
+group to its in-byte offset and two `pshufb` passes (merge secondaries,
+scatter to output positions) reconstruct the 13 output bytes.
 
-**AVX2** (26 bytes → 32 chars per call, 256-bit YMM):
+**AVX2 / x86_64** (26 bytes → 32 chars per call, 256-bit YMM):
 Same pipeline as SSE4.1 using `_mm256_*` equivalents, applied to two
 independent 13-byte blocks in the low and high 128-bit lanes respectively.
 No cross-lane interaction.
+
+**NEON / aarch64** (13 bytes → 16 chars per call, 128-bit NEON):
+`vqtbl1q_u8` (NEON `pshufb` equivalent) gathers bit-group bytes;
+`vshrq_n_u32` + `vbslq_u32` blends extract the right shift per group;
+`vmull_u16` + `vshrq_n_u32` + `vmovn_u32` divide by 91; `vzipq_u8`
+interleaves lo/hi; `vaddq_u8` + `vcgtq_u8` + `vsubq_u8` apply alphabet
+gap correction.
+
+Decode mirrors SSE4.1: `vcgtq_u8` + `vaddq_u8` unmaps characters;
+`vuzpq_u8` separates lo/hi; `vmlaq_u16` reconstructs `val = lo + hi*91`;
+`vshlq_n_u32` + `vbslq_u32` left-shifts groups; two `vqtbl1q_u8` passes
+(merge secondaries, scatter to output positions) reconstruct 13 bytes.
+NEON is mandatory on aarch64 — no runtime detection needed.
 
 ### 3.3 SIMD benchmark results (1 MiB random input)
 
@@ -194,7 +210,7 @@ constants at block entry, so the generic macro is split into
 used at their hardcoded positions.
 See §2.4 for the Henke bottleneck analysis.
 
-### 3.5 Profiling: SIMD hotspots (`perf record -e cpu-clock`)
+### 3.5 Profiling: SIMD hotspots (samply / perf record)
 
 **simd128 encode** — 94% in `encode_sse41`.  Top: `paddb` (19.2%),
 `psubb` (9.6%), `movdqa` (8.7%), `packusdw` (7.3%), `packuswb` (7.9%),
@@ -202,8 +218,8 @@ See §2.4 for the Henke bottleneck analysis.
 correction and dominates.  No single-instruction bottleneck; pipeline is
 reasonably balanced across the encode stages.
 
-**simd128 decode** — scalar bit-pack bottleneck eliminated by pshufb scatter
-(+31% throughput).  Profiling not yet re-run after the scatter rewrite.
+**simd128 decode** — pshufb scatter replaced the scalar u128 bit-pack
+(+31% throughput).  Hot-path profiling not re-run after the rewrite.
 
 **simd256 encode** — 95% in `encode_avx2`.  Top: `vpaddb` (20.8%),
 `vpunpcklbw` (10.6%), `vpaddw` (11.1%), `vpackuswb` (7.2%+),
@@ -212,19 +228,23 @@ reasonably balanced across the encode stages.
 4.3% — the multiply is not the bottleneck; the dependent `vpaddw` absorbs
 the latency cost.
 
-**simd256 decode** — scalar bit-pack bottleneck eliminated by pshufb scatter
-(+68% throughput).  Profiling not yet re-run after the scatter rewrite.
+**simd256 decode** — pshufb scatter replaced the scalar u128 bit-pack
+(+68% throughput).  Hot-path profiling not re-run after the rewrite.
 
 ---
 
-## 4. Open optimisation opportunities
+## 4. Open optimization opportunities
 
 - **AVX2 encode alphabet correction:** `vpaddb` at 20.8% is the top
   hotspot — the `+0x23` base offset add after the gap correction.  Together
   with `vpunpcklbw`/`vpackuswb` (interleave/pack) this sequence accounts
   for ~40% of samples.  Restructuring the output layout to avoid the
   interleave step could reduce this cost.
-- **NEON / SVE2:** aarch64 kernels not yet implemented or benchmarked.
+- **NEON:** encode and decode kernels implemented (`encode_block_neon`,
+  `decode_block_neon` with `vqtbl1q_u8` scatter); not yet benchmarked on
+  aarch64 hardware.
+- **SVE2:** not yet implemented; `Simd256` currently falls back to NEON on
+  aarch64.
 - **`enc_char` / `dec_char` peephole:** LLVM emits `cmp; adc $-1; lea`
   (3 instructions) instead of the optimal `cmp; sbb $0xDC` (2 instructions)
   for the alphabet gap correction.  Tracked for future inline-asm work.
