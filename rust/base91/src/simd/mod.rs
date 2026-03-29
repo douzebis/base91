@@ -425,9 +425,9 @@ impl Encoder {
         // through the scalar encoder until alignment (nbits==0) is restored,
         // then let SIMD process the remaining aligned bytes.
         //
-        // Maximum prefix to drain: at most 12 bits of carry, requiring at most
-        // 2 input bytes (2×8=16 ≥ 13) to complete a group and return to nbits==0.
-        // Feed bytes one at a time until aligned or input exhausted.
+        // nbits=0 is only reached at 13-byte block boundaries (104 bits = 8×13).
+        // In the worst case (nbits=1 on entry) up to 12 bytes must be consumed
+        // before the next block boundary restores alignment.
         let input = if !self.scalar.is_aligned() {
             let mut i = 0;
             while i < input.len() && !self.scalar.is_aligned() {
