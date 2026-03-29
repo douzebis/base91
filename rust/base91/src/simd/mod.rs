@@ -56,17 +56,12 @@ use std::sync::OnceLock;
 /// - `Scalar`  → scalar fixed-width path (all architectures)
 /// - `Simd128` → SSE4.1 (x86_64) / NEON (aarch64)
 /// - `Simd256` → AVX2  (x86_64) / SVE2-256 (aarch64, not yet implemented)
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SimdLevel {
     Scalar,
     Simd128,
+    #[default]
     Simd256,
-}
-
-impl Default for SimdLevel {
-    fn default() -> Self {
-        SimdLevel::Simd256
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +96,7 @@ fn detect_arch() -> ArchLevel {
         if is_x86_feature_detected!("sse4.1") {
             return ArchLevel::Sse41;
         }
-        return ArchLevel::Scalar;
+        ArchLevel::Scalar
     }
 
     #[cfg(all(not(feature = "force-scalar"), target_arch = "aarch64"))]
@@ -310,10 +305,8 @@ fn decode_into(input: &[u8], max_level: SimdLevel, output: &mut Vec<u8>) -> bool
             // Handle 16–31 char tail with SSE4.1 before falling to scalar.
             let tail = &input[full..];
             let sse_full = (tail.len() / 16) * 16;
-            if sse_full > 0 {
-                if !unsafe { x86::decode_sse41(&tail[..sse_full], output) } {
-                    return false;
-                }
+            if sse_full > 0 && !unsafe { x86::decode_sse41(&tail[..sse_full], output) } {
+                return false;
             }
             let mut sc = scalar::ScalarDecoder::new();
             sc.decode(&tail[sse_full..], output);
@@ -400,16 +393,14 @@ fn insert_wrap_newlines(output: &mut Vec<u8>, wrap: usize) {
 pub struct Encoder {
     scalar: scalar::ScalarEncoder,
     max_level: SimdLevel,
-    wrap: usize,
     prefix_written: bool,
 }
 
 impl Encoder {
-    pub fn new(max_level: SimdLevel, wrap: usize) -> Self {
+    pub fn new(max_level: SimdLevel) -> Self {
         Self {
             scalar: scalar::ScalarEncoder::new(),
             max_level,
-            wrap,
             prefix_written: false,
         }
     }
@@ -477,7 +468,7 @@ impl Encoder {
 
 impl Default for Encoder {
     fn default() -> Self {
-        Self::new(SimdLevel::default(), 0)
+        Self::new(SimdLevel::default())
     }
 }
 
@@ -635,7 +626,7 @@ mod tests {
         let input: Vec<u8> = (0u8..=255).cycle().take(10_000).collect();
         let reference = encode(&input, SimdLevel::default(), 0);
         for chunk_size in [1, 2, 7, 13, 14, 25, 26, 27, 64, 100, 256] {
-            let mut enc = Encoder::new(SimdLevel::default(), 0);
+            let mut enc = Encoder::new(SimdLevel::default());
             let mut out = Vec::new();
             for chunk in input.chunks(chunk_size) {
                 enc.encode(chunk, &mut out);

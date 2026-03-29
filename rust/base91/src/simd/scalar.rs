@@ -43,6 +43,7 @@ fn dec_char(b: u8) -> Option<u8> {
 // ---------------------------------------------------------------------------
 
 /// Stateful scalar fixed-width encoder.
+#[derive(Default)]
 pub struct ScalarEncoder {
     queue: u32,
     nbits: u32,
@@ -195,6 +196,12 @@ pub struct ScalarDecoder {
     nbits: u32,
     /// Pending first character of a pair. `u32::MAX` = none.
     first: u32,
+}
+
+impl Default for ScalarDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ScalarDecoder {

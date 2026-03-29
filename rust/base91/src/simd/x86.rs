@@ -44,6 +44,7 @@
 //!
 //! - `shuf_lo`: groups 0–3 into 32-bit lanes 0–3 (shifts 0,5,2,7)
 //! - `shuf_hi`: groups 4–7 into 32-bit lanes 0–3 (shifts 4,1,6,3)
+//!
 //! Four `_mm_srli_epi32` + three `_mm_blend_epi16` per half.
 
 #![allow(non_snake_case)]
