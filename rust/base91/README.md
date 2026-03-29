@@ -18,9 +18,18 @@ let decoded = base91::decode(&encoded);
 assert_eq!(decoded, b"Hello, world!");
 ```
 
+## Why basE91?
+
+basE91 encodes binary data into printable ASCII using only **~1.23 bytes per
+input byte** — versus Base64's 1.33.  That 8% overhead reduction means
+smaller payloads, fewer bytes on the wire, and less energy consumed at every
+hop from RAM to NIC to network switch.
+
 ## Features
 
 - **`no_std`** compatible (disable default features)
+- **SIMD-accelerated** — optional fixed-width variant with SSE4.1, AVX2, and
+  NEON kernels; up to **7.68 GiB/s encode / 8.57 GiB/s decode** on x86_64
 - **Streaming API** — feed data in chunks, no full-buffer requirement
 - **`std::io` adapters** — `EncoderWriter<W>` and `DecoderReader<R>` (feature `io`, on by default)
 - **Unsafe unchecked variants** — `encode_unchecked` / `decode_unchecked` for callers that
@@ -29,16 +38,36 @@ assert_eq!(decoded, b"Hello, world!");
 
 ## Performance
 
-Benchmarked on an Intel Core Ultra 7 165U (AC, performance mode), 1 MiB random input:
+Benchmarked on an Intel Core Ultra 7 165U, pinned to P-cores (no HT contention),
+1 MiB deterministic random input (seed `0xdeadbeef_cafebabe`).
+Decode throughput for the SIMD variant is measured on encoded bytes (≈1.23× input).
 
-| Crate | Encode | Decode |
+### Henke (wire-compatible) path
+
+| Crate / variant | Encode | Decode |
 |---|---|---|
-| **`base91-rs` (this crate, safe)** | **830 MiB/s** | **1013 MiB/s** |
-| **`base91-rs` (unchecked)** | **928 MiB/s** | **1220 MiB/s** |
-| `base91` v0.1.0 (dnsl48) | 612 MiB/s | 767 MiB/s |
+| **`base91-rs` safe (`encode`)** | **841 MiB/s** | **872 MiB/s** |
+| **`base91-rs` unchecked (`encode_unchecked`)** | **993 MiB/s** | **1.15 GiB/s** |
+| `base91` v0.1.0 (dnsl48) | 624 MiB/s | 784 MiB/s |
 
-**~1.35× faster** on encode, **~1.32× faster** on decode vs the next most popular crate,
-using the safe public API. The unchecked API reaches **~1.52×** / **~1.59×**.
+**~1.35× faster encode, ~1.47× faster decode** vs the next most popular crate
+on the safe API.  The unchecked API reaches **~1.59× / ~1.47×**.
+
+### SIMD fixed-width variant (`--simd` flag / `simd` module)
+
+Uses a non-Henke, fixed-width 13-bit block layout that makes the block
+boundaries predictable — unlocking SIMD parallelism that is impossible on
+the Henke path.  The encoded stream is prefixed with `-` to distinguish it
+from Henke output.
+
+| Path | Encode | Decode | vs. Henke unchecked |
+|---|---|---|---|
+| scalar fixed-width | ~1.52 GiB/s | ~2.31 GiB/s | 1.5× / 2.0× |
+| simd128 (SSE4.1 / NEON) | ~4.40 GiB/s | ~6.25 GiB/s | 4.4× / 5.4× |
+| simd256 (AVX2) | ~7.68 GiB/s | ~8.57 GiB/s | 7.7× / 7.5× |
+
+The SIMD kernel auto-selects the best available level at runtime (AVX2 →
+SSE4.1 → NEON → scalar).
 
 ## Usage
 
@@ -47,14 +76,14 @@ using the safe public API. The unchecked API reaches **~1.52×** / **~1.59×**.
 base91-rs = "0.2"
 ```
 
-### One-shot
+### One-shot (Henke)
 
 ```rust
 let encoded: Vec<u8> = base91::encode(b"some input");
 let decoded: Vec<u8> = base91::decode(&encoded);
 ```
 
-### Streaming
+### Streaming (Henke)
 
 ```rust
 use base91::{Encoder, encode_size_hint};
@@ -62,6 +91,28 @@ use base91::{Encoder, encode_size_hint};
 let input = b"some large input";
 let mut out = Vec::with_capacity(encode_size_hint(input.len()));
 let mut enc = Encoder::new();
+enc.encode(input, &mut out);
+enc.finish(&mut out);
+```
+
+### One-shot SIMD
+
+```rust
+use base91::simd::{self, SimdLevel};
+
+let encoded = simd::encode(b"some input", SimdLevel::default(), 0);
+let decoded = simd::decode(&encoded, SimdLevel::default()).unwrap();
+assert_eq!(decoded, b"some input");
+```
+
+### Streaming SIMD
+
+```rust
+use base91::simd::{self, Encoder as SimdEncoder, SimdLevel};
+
+let input = b"some large input";
+let mut out = Vec::new();
+let mut enc = SimdEncoder::new(SimdLevel::default());
 enc.encode(input, &mut out);
 enc.finish(&mut out);
 ```
