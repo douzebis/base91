@@ -88,7 +88,7 @@ struct Cli {
     /// 0x28-0x7E); not compatible with legacy Henke decoders. Output
     /// contains no single-quote characters and is safe to single-quote
     /// in shell. Ignored when decoding. With --wrap, the value must be
-    /// a multiple of 16.
+    /// a multiple of 32.
     #[arg(long)]
     simd: bool,
 
@@ -262,6 +262,33 @@ fn compute_ibuf_encode(buf_size: usize) -> usize {
 // Decode path
 // ---------------------------------------------------------------------------
 
+fn do_decode_simd(
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+    buf_size: usize,
+) -> io::Result<usize> {
+    let ibuf_size = buf_size.max(1);
+    let mut ibuf = vec![0u8; ibuf_size];
+    let mut raw: Vec<u8> = Vec::new();
+    loop {
+        let n = input.read(&mut ibuf)?;
+        if n == 0 {
+            break;
+        }
+        raw.extend_from_slice(&ibuf[..n]);
+    }
+    let decoded =
+        base91::simd::decode(&raw, base91::simd::SimdLevel::default()).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "not a SIMD stream (missing '-' prefix)",
+            )
+        })?;
+    let total = decoded.len();
+    output.write_all(&decoded)?;
+    Ok(total)
+}
+
 fn do_decode(input: &mut dyn Read, output: &mut dyn Write, buf_size: usize) -> io::Result<usize> {
     let ibuf_size = compute_ibuf_decode(buf_size);
     let mut ibuf = vec![0u8; ibuf_size];
@@ -320,17 +347,20 @@ fn run() -> io::Result<()> {
         decode_default
     };
 
-    let simd = cli.simd && !decode;
+    let simd = cli.simd;
     let buf_size = cli.buffer.unwrap_or(65536);
+    // For --simd encoding, the Henke wrap default (76) is not a valid multiple
+    // of 16, so discard it unless the user supplied an explicit --wrap value.
+    let effective_wrap_default = if simd && !decode { None } else { wrap_default };
     let wrap = cli
         .wrap
-        .or(if decode { None } else { wrap_default })
+        .or(if decode { None } else { effective_wrap_default })
         .unwrap_or(0);
     let verbose = cli.verbose;
 
-    // Validate --wrap multiple-of-16 constraint for --simd.
-    if simd && wrap != 0 && wrap % 16 != 0 {
-        eprintln!("base91: --wrap value must be a multiple of 16 when --simd is active");
+    // Validate explicit --wrap multiple-of-32 constraint for --simd (encoding only).
+    if simd && !decode && wrap != 0 && wrap % 32 != 0 {
+        eprintln!("base91: --wrap value must be a multiple of 32 when --simd is active");
         std::process::exit(1);
     }
 
@@ -369,7 +399,13 @@ fn run() -> io::Result<()> {
     let mut input = open_input(cli.file.as_deref())?;
     let mut output = open_output(ofile)?;
 
-    if decode {
+    if decode && simd {
+        let ototal = do_decode_simd(&mut *input, &mut *output, buf_size)?;
+        output.flush()?;
+        if verbose >= 1 {
+            eprintln!("\tdone ({ototal} bytes, SIMD variant)");
+        }
+    } else if decode {
         let ototal = do_decode(&mut *input, &mut *output, buf_size)?;
         output.flush()?;
         if verbose >= 1 {

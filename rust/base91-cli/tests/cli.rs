@@ -242,3 +242,192 @@ fn verbose_decode_writes_to_stderr() {
         "expected 'decoding' in stderr: {stderr_str:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// --simd flag
+// ---------------------------------------------------------------------------
+
+#[test]
+fn simd_round_trip() {
+    let input = b"Hello, world!";
+    let (encoded, _, status) = run(&["--simd"], input);
+    assert!(status.success());
+    let (decoded, _, status2) = run(&["--simd", "-d"], &encoded);
+    assert!(status2.success());
+    assert_eq!(decoded, input);
+}
+
+#[test]
+fn simd_round_trip_binary() {
+    let input: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
+    let (encoded, _, status) = run(&["--simd"], &input);
+    assert!(status.success());
+    let (decoded, _, status2) = run(&["--simd", "-d"], &encoded);
+    assert!(status2.success());
+    assert_eq!(decoded, input);
+}
+
+#[test]
+fn simd_output_starts_with_dash() {
+    let input = b"Hello, world!";
+    let (encoded, _, status) = run(&["--simd", "-w", "0"], input);
+    assert!(status.success());
+    assert!(
+        encoded.first() == Some(&b'-'),
+        "SIMD output must start with '-', got: {:?}",
+        &encoded[..encoded.len().min(4)]
+    );
+}
+
+#[test]
+fn simd_output_contains_no_single_quote() {
+    let input: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
+    let (encoded, _, status) = run(&["--simd", "-w", "0"], &input);
+    assert!(status.success());
+    assert!(
+        !encoded.contains(&b'\''),
+        "SIMD output must not contain single-quote characters"
+    );
+}
+
+#[test]
+fn simd_output_contains_no_double_quote() {
+    let input: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
+    let (encoded, _, status) = run(&["--simd", "-w", "0"], &input);
+    assert!(status.success());
+    assert!(
+        !encoded.contains(&b'"'),
+        "SIMD output must not contain double-quote characters"
+    );
+}
+
+#[test]
+fn simd_decode_requires_simd_flag() {
+    // --simd -d decodes SIMD streams; plain -d does not (Henke decoder).
+    let input: Vec<u8> = (0u8..=255).cycle().take(256).collect();
+    let (encoded, _, status) = run(&["--simd", "-w", "0"], &input);
+    assert!(status.success());
+    // SIMD-encoded stream decodes correctly with --simd -d.
+    let (decoded, _, s) = run(&["--simd", "-d"], &encoded);
+    assert!(s.success(), "--simd -d must succeed on a SIMD stream");
+    assert_eq!(decoded, input);
+    // Plain -d (Henke decoder) rejects a SIMD stream (missing '-' prefix check
+    // is in Henke decoder, which just treats '-' as a non-alphabet byte and
+    // silently produces wrong or empty output — not an error per se, but the
+    // round-trip must not equal the original input).
+    let (henke_decoded, _, _) = run(&["-d"], &encoded);
+    assert_ne!(
+        henke_decoded, input,
+        "Henke -d must not correctly decode a SIMD stream"
+    );
+}
+
+#[test]
+fn simd_wrap_multiple_of_32_accepted() {
+    let input: Vec<u8> = (0u8..=255).cycle().take(1024).collect();
+    let (_, _, status) = run(&["--simd", "-w", "32"], &input);
+    assert!(status.success());
+}
+
+#[test]
+fn simd_wrap_non_multiple_of_32_rejected() {
+    let input = b"Hello, world!";
+    // 16 is a multiple of 16 but not 32 — must be rejected.
+    let (_, stderr, status) = run(&["--simd", "-w", "16"], input);
+    assert!(
+        !status.success(),
+        "expected failure for non-multiple-of-32 wrap"
+    );
+    let stderr_str = String::from_utf8_lossy(&stderr);
+    assert!(
+        stderr_str.contains("multiple of 32"),
+        "expected 'multiple of 32' in error: {stderr_str:?}"
+    );
+}
+
+#[test]
+fn wrap_non_multiple_of_32_without_simd_accepted() {
+    // Without --simd, any positive wrap value is fine (including 16 or 17).
+    let input: Vec<u8> = (0u8..=255).cycle().take(1024).collect();
+    let (_, _, status) = run(&["-w", "17"], &input);
+    assert!(status.success());
+}
+
+#[test]
+fn simd_verbose_mentions_simd() {
+    let input = b"Hello, world!";
+    let (_, stderr, status) = run(&["--simd", "-v"], input);
+    assert!(status.success());
+    let stderr_str = String::from_utf8_lossy(&stderr);
+    assert!(
+        stderr_str.to_lowercase().contains("simd"),
+        "expected 'SIMD' in stderr: {stderr_str:?}"
+    );
+}
+
+#[test]
+fn simd_round_trip_with_wrap() {
+    let input: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
+    let (encoded, _, status) = run(&["--simd", "-w", "32"], &input);
+    assert!(status.success());
+    // The output starts with '-' followed by wrapped payload.
+    // The first line is '-' + up to 32 payload chars (len <= 33).
+    // All subsequent lines are at most 32 chars.
+    let mut lines = encoded.split(|&b| b == b'\n');
+    if let Some(first) = lines.next() {
+        // Strip leading '-' before checking width.
+        let payload = first.strip_prefix(b"-").unwrap_or(first);
+        assert!(
+            payload.len() <= 32,
+            "first line payload len {} > 32",
+            payload.len()
+        );
+    }
+    for line in lines {
+        assert!(line.len() <= 32, "line len {} > 32", line.len());
+    }
+    let (decoded, _, status2) = run(&["--simd", "-d"], &encoded);
+    assert!(status2.success());
+    assert_eq!(decoded, input);
+}
+
+#[test]
+fn simd_fixture_round_trip() {
+    let input = fixture("rnd0.dat");
+    let (encoded, _, status) = run(&["--simd", "-w", "0"], &input);
+    assert!(status.success());
+    let (decoded, _, status2) = run(&["--simd", "-d"], &encoded);
+    assert!(status2.success());
+    assert_eq!(decoded, input);
+}
+
+// ---------------------------------------------------------------------------
+// Small-input round-trips (sizes 0..=32) — Henke and SIMD
+// ---------------------------------------------------------------------------
+
+#[test]
+fn henke_round_trip_sizes_0_to_32() {
+    // Use a fixed pattern so failures are reproducible.
+    let pattern: Vec<u8> = (0u8..=255).cycle().take(33).collect();
+    for len in 0usize..=32 {
+        let input = &pattern[..len];
+        let (encoded, _, s1) = run(&["-w", "0"], input);
+        assert!(s1.success(), "encode failed at len={len}");
+        let (decoded, _, s2) = run(&["-d"], &encoded);
+        assert!(s2.success(), "decode failed at len={len}");
+        assert_eq!(decoded, input, "round-trip mismatch at len={len}");
+    }
+}
+
+#[test]
+fn simd_round_trip_sizes_0_to_32() {
+    let pattern: Vec<u8> = (0u8..=255).cycle().take(33).collect();
+    for len in 0usize..=32 {
+        let input = &pattern[..len];
+        let (encoded, _, s1) = run(&["--simd", "-w", "0"], input);
+        assert!(s1.success(), "simd encode failed at len={len}");
+        let (decoded, _, s2) = run(&["--simd", "-d"], &encoded);
+        assert!(s2.success(), "simd decode failed at len={len}");
+        assert_eq!(decoded, input, "simd round-trip mismatch at len={len}");
+    }
+}

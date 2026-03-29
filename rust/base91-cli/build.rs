@@ -71,7 +71,7 @@ fn build_command() -> Command {
                 .value_name("COLS")
                 .help(
                     "Wrap encoded lines after COLS characters (0 = no wrap; default 76). \
-                     With --simd, COLS must be a multiple of 16. \
+                     With --simd, COLS must be a multiple of 32. \
                      Has no effect when decoding.",
                 ),
         )

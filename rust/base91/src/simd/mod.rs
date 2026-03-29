@@ -180,7 +180,7 @@ pub fn decode_size_hint(encoded_len: usize) -> usize {
 ///
 /// Output begins with `-` then SIMD-alphabet characters.
 /// `wrap=0` means no line wrapping; otherwise `\n` is inserted after every
-/// `wrap` output characters (`wrap` must be a multiple of 16).
+/// `wrap` output characters (`wrap` must be a multiple of 32).
 /// `max_level` caps the SIMD kernel used; [`SimdLevel::default`] uses the best
 /// available.
 pub fn encode(input: &[u8], max_level: SimdLevel, wrap: usize) -> Vec<u8> {
@@ -295,6 +295,14 @@ fn encode_into(input: &[u8], max_level: SimdLevel, wrap: usize, output: &mut Vec
 }
 
 fn decode_into(input: &[u8], max_level: SimdLevel, output: &mut Vec<u8>) -> bool {
+    // Strip any \n bytes (inserted by --wrap during encoding) before dispatching
+    // to SIMD kernels, which do not tolerate non-alphabet bytes in their input.
+    // The scalar decoder handles them inline, but we normalise here so all paths
+    // see clean payload bytes.
+    if input.contains(&b'\n') {
+        let clean: Vec<u8> = input.iter().copied().filter(|&b| b != b'\n').collect();
+        return decode_into(&clean, max_level, output);
+    }
     match effective_level(max_level) {
         #[cfg(target_arch = "x86_64")]
         ArchLevel::Avx2 => {

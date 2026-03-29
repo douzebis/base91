@@ -108,17 +108,17 @@ subtraction.
 
 ### `--wrap` constraint with `--simd`
 
-With `--simd`, the `-w` / `--wrap` value must be a multiple of 16.
-The SIMD block produces exactly 16 output characters per 13-byte input
-block. Wrapping at a non-multiple-of-16 boundary would split a block
-across lines, preventing full SIMD processing of wrapped output during
-decoding.
+With `--simd`, the `-w` / `--wrap` value must be a multiple of 32.
+The AVX2 kernel processes two 13-byte blocks per call, producing 32
+output characters. Wrapping at a non-multiple-of-32 boundary would
+split an AVX2 block across lines, preventing correct SIMD processing
+of wrapped output during decoding.
 
-If the user supplies a `--wrap` value that is not a multiple of 16
+If the user supplies a `--wrap` value that is not a multiple of 32
 alongside `--simd`, the CLI exits with an error:
 
 ```
-error: --wrap value must be a multiple of 16 when --simd is active
+base91: --wrap value must be a multiple of 32 when --simd is active
 ```
 
 If `--wrap` is not specified, the default (no wrapping) applies and
@@ -233,7 +233,7 @@ The existing `codec.rs` Henke path is untouched.
   - Encoding only; ignored when `--decode` / `-d` is active.
   - Documented in `--help` with a note that output is not compatible with
     legacy Henke decoders.
-- Validate `--wrap` is a multiple of 16 when `--simd` is set; exit with
+- Validate `--wrap` is a multiple of 32 when `--simd` is set; exit with
   error otherwise.
 - The CLI passes `--wrap` directly to the encoder; no post-hoc second pass.
 - Man page `base91.1` updated with a `--simd` entry and a COMPATIBILITY
@@ -293,7 +293,7 @@ pub fn decode_size_hint(encoded_len: usize) -> usize;
 
 /// Encode `input` to a new Vec. Output begins with `-` then SIMD-alphabet
 /// characters. `wrap=0` means no line wrapping; otherwise a `\n` is
-/// inserted after every `wrap` output characters (must be a multiple of 16).
+/// inserted after every `wrap` output characters (must be a multiple of 32).
 pub fn encode(input: &[u8], max_level: SimdLevel, wrap: usize) -> Vec<u8>;
 
 /// Decode a SIMD-variant stream (leading `-`) to binary bytes.
