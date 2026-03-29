@@ -264,20 +264,64 @@ impl ScalarDecoder {
         }
 
         // Main loop: 16 alphabet chars per iteration, optional \n after.
+        //
+        // When nbits == 0 at block entry the second-byte drain positions are
+        // fixed: pairs 1, 3, 4, 6, 7 emit 2 bytes; pairs 0, 2, 5 emit 1 byte.
+        // Two specialised macros eliminate 8 branches per block.
+        macro_rules! emit_pair_single {
+            ($d0:expr, $d1:expr) => {{
+                let val = $d0 + $d1 * 91;
+                queue |= val << nbits;
+                nbits += 13;
+                unsafe { spare.get_unchecked_mut(n).write(queue as u8) };
+                n += 1;
+                queue >>= 8;
+                nbits -= 8;
+            }};
+        }
+        macro_rules! emit_pair_double {
+            ($d0:expr, $d1:expr) => {{
+                let val = $d0 + $d1 * 91;
+                queue |= val << nbits;
+                nbits += 13;
+                unsafe { spare.get_unchecked_mut(n).write(queue as u8) };
+                n += 1;
+                queue >>= 8;
+                nbits -= 8;
+                unsafe { spare.get_unchecked_mut(n).write(queue as u8) };
+                n += 1;
+                queue >>= 8;
+                nbits -= 8;
+            }};
+        }
+
         while i + 16 <= input.len() {
             // SAFETY: i+16 <= input.len() guarantees 16 readable bytes.
             let d: [u32; 16] =
                 std::array::from_fn(|k| idx!(unsafe { *input.get_unchecked(i + k) }));
             i += 16;
 
-            emit_pair!(d[0], d[1]);
-            emit_pair!(d[2], d[3]);
-            emit_pair!(d[4], d[5]);
-            emit_pair!(d[6], d[7]);
-            emit_pair!(d[8], d[9]);
-            emit_pair!(d[10], d[11]);
-            emit_pair!(d[12], d[13]);
-            emit_pair!(d[14], d[15]);
+            if nbits == 0 {
+                // Fast path: drain pattern is fixed — no branches.
+                emit_pair_single!(d[0], d[1]); // nbits: 0→5
+                emit_pair_double!(d[2], d[3]); // nbits: 5→2
+                emit_pair_single!(d[4], d[5]); // nbits: 2→7
+                emit_pair_double!(d[6], d[7]); // nbits: 7→4
+                emit_pair_double!(d[8], d[9]); // nbits: 4→1
+                emit_pair_single!(d[10], d[11]); // nbits: 1→6
+                emit_pair_double!(d[12], d[13]); // nbits: 6→3
+                emit_pair_double!(d[14], d[15]); // nbits: 3→0
+            } else {
+                // Slow path: carry from chunk boundary — use generic emit_pair.
+                emit_pair!(d[0], d[1]);
+                emit_pair!(d[2], d[3]);
+                emit_pair!(d[4], d[5]);
+                emit_pair!(d[6], d[7]);
+                emit_pair!(d[8], d[9]);
+                emit_pair!(d[10], d[11]);
+                emit_pair!(d[12], d[13]);
+                emit_pair!(d[14], d[15]);
+            }
 
             // Skip optional \n after each 16-char block (--wrap).
             if i < input.len() && unsafe { *input.get_unchecked(i) } == b'\n' {
