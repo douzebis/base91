@@ -26,13 +26,13 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry + build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -54,14 +54,14 @@ jobs:
           2>&1 | tee ../bench-${{ matrix.os }}.txt
 
       - name: Upload Criterion HTML report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: criterion-report-${{ matrix.os }}
           path: rust/target/criterion/
           if-no-files-found: warn
 
       - name: Upload bench summary (text)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-summary-${{ matrix.os }}
           path: bench-${{ matrix.os }}.txt
