@@ -166,8 +166,12 @@ pub fn detect() -> SimdLevel {
 #[inline]
 pub fn encode_size_hint(input_len: usize, wrap: usize) -> usize {
     let payload = (input_len * 16).div_ceil(13) + 2;
-    let newlines = if wrap > 0 { payload.div_ceil(wrap) } else { 0 };
-    1 + payload + newlines // 1 for '-' prefix
+    let newlines = if wrap > 0 {
+        1 + payload.div_ceil(wrap)
+    } else {
+        0
+    };
+    1 + payload + newlines // 1 for '-' prefix; +1 newline for the '-\n' header when wrapping
 }
 
 /// Upper bound on decoded output length for `encoded_len` encoded bytes.
@@ -352,21 +356,23 @@ fn decode_into(input: &[u8], max_level: SimdLevel, output: &mut Vec<u8>) -> bool
     }
 }
 
-/// Insert `\n` after every `wrap` payload characters (after the leading `-`).
+/// Insert `\n` after the leading `-` and after every `wrap` payload characters.
+///
+/// Output layout: `-\n` then payload split into lines of exactly `wrap` chars
+/// (last line may be shorter).  Every payload line is the same width, making
+/// the output easy to inspect and the decoder's job uniform.
 fn insert_wrap_newlines(output: &mut Vec<u8>, wrap: usize) {
     // payload starts at index 1 (after '-')
     let payload_len = output.len() - 1;
-    let newline_count = payload_len / wrap;
-    if newline_count == 0 {
-        return;
-    }
+    // One \n after '-', plus one \n after each full wrap-sized block.
+    let newline_count = 1 + payload_len / wrap;
     // Grow the buffer to fit the newlines, then shift right-to-left.
     output.resize(output.len() + newline_count, 0);
     let buf = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr(), output.len()) };
     let total = buf.len();
     // dst: write cursor (from the end); src: read cursor into original payload.
     let mut dst = total - 1;
-    // last byte of original payload (in-place)
+    // last byte of original payload (in the now-grown buffer, before shift)
     let mut src = total - 1 - newline_count;
     // Number of chars in the trailing partial block.
     let mut col = payload_len % wrap;
@@ -380,12 +386,13 @@ fn insert_wrap_newlines(output: &mut Vec<u8>, wrap: usize) {
             dst -= 1;
             src -= 1;
         }
-        if src == 0 {
-            // src==0 means we just passed the '-' prefix byte; done.
-            break;
-        }
         buf[dst] = b'\n';
         dst -= 1;
+        if src == 0 {
+            // src==0: we just passed the '-' prefix byte; the \n we just wrote
+            // is the post-'-' header newline.  Done.
+            break;
+        }
         col = wrap;
     }
 }

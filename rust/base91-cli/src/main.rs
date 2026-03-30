@@ -127,7 +127,7 @@ fn parse_size(s: &str) -> Result<usize, String> {
 /// - `b91enc`: encode, no line wrapping
 /// - `b91dec`: decode
 /// - anything else (`base91`): encode, wrap at 76
-fn defaults_from_progname(argv0: &OsStr) -> (bool, Option<usize>) {
+fn defaults_from_progname(argv0: &OsStr) -> (bool, usize) {
     let name = Path::new(argv0)
         .file_name()
         .and_then(|n| n.to_str())
@@ -135,9 +135,9 @@ fn defaults_from_progname(argv0: &OsStr) -> (bool, Option<usize>) {
     // Strip a leading "lt-" that libtool sometimes prepends in test runs.
     let name = name.strip_prefix("lt-").unwrap_or(name);
     match name {
-        "b91enc" => (false, None), // encode, no wrap
-        "b91dec" => (true, None),  // decode
-        _ => (false, Some(76)),    // base91: encode, wrap=76
+        "b91enc" => (false, 0), // encode, no wrap
+        "b91dec" => (true, 0),  // decode
+        _ => (false, 76),       // base91: encode, wrap=76
     }
 }
 
@@ -349,13 +349,12 @@ fn run() -> io::Result<()> {
 
     let simd = cli.simd;
     let buf_size = cli.buffer.unwrap_or(65536);
-    // For --simd encoding, the Henke wrap default (76) is not a valid multiple
-    // of 16, so discard it unless the user supplied an explicit --wrap value.
-    let effective_wrap_default = if simd && !decode { None } else { wrap_default };
+    // For --simd encoding, replace the Henke wrap default (76, not a multiple
+    // of 32) with 64.
+    let effective_wrap_default = if simd && !decode { 64 } else { wrap_default };
     let wrap = cli
         .wrap
-        .or(if decode { None } else { effective_wrap_default })
-        .unwrap_or(0);
+        .unwrap_or(if decode { 0 } else { effective_wrap_default });
     let verbose = cli.verbose;
 
     // Validate explicit --wrap multiple-of-32 constraint for --simd (encoding only).
