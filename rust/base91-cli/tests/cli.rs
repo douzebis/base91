@@ -331,9 +331,9 @@ fn simd_wrap_multiple_of_32_accepted() {
 
 #[test]
 fn simd_wrap_non_multiple_of_32_rejected() {
-    let input = b"Hello, world!";
     // 16 is a multiple of 16 but not 32 — must be rejected.
-    let (_, stderr, status) = run(&["--simd", "-w", "16"], input);
+    // Empty stdin: validation fires before any I/O, so no broken pipe.
+    let (_, stderr, status) = run(&["--simd", "-w", "16"], b"");
     assert!(
         !status.success(),
         "expected failure for non-multiple-of-32 wrap"
