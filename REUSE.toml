@@ -22,12 +22,6 @@ SPDX-License-Identifier = "BSD-3-Clause"
 
 [[annotations]]
 path = [
-    "rust/base91-cli/man/man1/base91.1",
-    "rust/base91-cli/completions/bash/base91.bash",
-    "rust/base91-cli/completions/elvish/base91.elv",
-    "rust/base91-cli/completions/fish/base91.fish",
-    "rust/base91-cli/completions/powershell/_base91.ps1",
-    "rust/base91-cli/completions/zsh/_base91",
     "rust/base91/man/man3/basE91.3",
     "rust/base91/man/man3/basE91_init.3",
     "rust/base91/man/man3/basE91_encode.3",

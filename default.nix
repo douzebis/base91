@@ -49,7 +49,7 @@ let
   rustCommon = {
     src        = rustSrc;
     pname      = "base91";
-    version    = "0.2.1";
+    version    = "0.2.2";
     strictDeps = true;
     nativeBuildInputs = [ pkgs.cargo pkgs.rustc ];
   };
@@ -101,21 +101,21 @@ let
       ln -s base91 $out/bin/b91dec
 
       # Man page and shell completions are written to OUT_DIR by build.rs.
-      out_dir=$(find target/release/build/base91-cli-*/out -maxdepth 0 2>/dev/null | head -1)
-      if [ -n "$out_dir" ]; then
-        install -Dm444 "$out_dir/base91.1" \
-          $out/share/man/man1/base91.1
+      # Search all build output dirs (crane may reuse artifacts from the deps phase).
+      man1=$(find target -name "base91.1" 2>/dev/null | head -1)
+      if [ -n "$man1" ]; then
+        out_dir=$(dirname "$man1")
+        install -Dm444 "$man1" $out/share/man/man1/base91.1
 
         installShellCompletion --cmd base91 \
           --bash "$out_dir/base91.bash" \
           --zsh  "$out_dir/_base91" \
           --fish "$out_dir/base91.fish"
 
-        # Elvish completion (installShellFiles doesn't have a built-in flag for it)
         install -Dm444 "$out_dir/base91.elv" \
           $out/share/elvish/lib/completions/base91.elv 2>/dev/null || true
       else
-        echo "WARNING: build.rs OUT_DIR not found — man page and completions not installed" >&2
+        echo "WARNING: build.rs output not found — man page and completions not installed" >&2
       fi
 
       # Man section 3 (C API) — committed source files, installed directly
@@ -150,7 +150,7 @@ let
   # ---------------------------------------------------------------------------
   base91CLib = pkgs.stdenv.mkDerivation {
     pname   = "libbase91";
-    version = "0.2.1";
+    version = "0.2.2";
     src     = ./src;
 
     nativeBuildInputs = [ pkgs.clang pkgs.llvmPackages.bintools ];
@@ -181,7 +181,7 @@ let
   # ---------------------------------------------------------------------------
   goTests = pkgs.stdenv.mkDerivation {
     pname   = "base91-go-tests";
-    version = "0.2.1";
+    version = "0.2.2";
 
     # Include go/ sources and the shared test fixtures from the Rust crate.
     src = pkgs.lib.cleanSourceWith {
@@ -225,15 +225,15 @@ let
   # ---------------------------------------------------------------------------
   pybase91 = pkgs.python313Packages.buildPythonPackage {
     pname    = "pybase91";
-    version  = "0.2.1";
+    version  = "0.2.2";
     pyproject = true;
     src      = rustSrc;
 
     cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
       pname   = "pybase91";
-      version = "0.2.1";
+      version = "0.2.2";
       src     = rustSrc;
-      hash    = "sha256-Xxph31cpLJjHA3EzU0541FM0IIkCTA9HHpWM8IiXHkQ=";
+      hash    = "sha256-X9hVLZ5+oVsPWihOxaAQQMLOJhejNBQnRQgdk1sp3Lw=";
     };
 
     # maturin must be invoked from the crate subdirectory (not the workspace root)

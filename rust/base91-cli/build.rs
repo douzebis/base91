@@ -4,9 +4,7 @@
 
 //! Build script: generates the man page and shell-completion files for base91.
 //!
-//! Outputs are written to `$OUT_DIR` and mirrored to `man/man1/` and
-//! `completions/<shell>/` next to the crate root (best-effort; silently
-//! skipped if the mirror path is not writable).
+//! Outputs are written to `$OUT_DIR`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -122,46 +120,17 @@ fn generate_completions(cmd: &mut Command, out_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Mirror a file from `src` to `dst`, creating parent directories as needed.
-/// Silently skips if the destination is not writable.
-fn mirror(src: &Path, dst: &Path) {
-    if let Some(parent) = dst.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
-            return;
-        }
-    }
-    let _ = std::fs::copy(src, dst);
-}
-
 fn main() -> io::Result<()> {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-
-    // Crate root: two levels up from $OUT_DIR/../../.. (target/…/build/…/out)
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
 
     let cmd = build_command();
 
     // --- Man page ---
     generate_man(&cmd, &out_dir)?;
-    mirror(
-        &out_dir.join("base91.1"),
-        &manifest_dir.join("man/man1/base91.1"),
-    );
 
     // --- Shell completions ---
     let mut cmd = cmd;
     generate_completions(&mut cmd, &out_dir)?;
-
-    let completion_files = [
-        ("base91.bash", "completions/bash/base91.bash"),
-        ("_base91", "completions/zsh/_base91"),
-        ("base91.fish", "completions/fish/base91.fish"),
-        ("base91.elv", "completions/elvish/base91.elv"),
-        ("_base91.ps1", "completions/powershell/_base91.ps1"),
-    ];
-    for (src_name, dst_rel) in &completion_files {
-        mirror(&out_dir.join(src_name), &manifest_dir.join(dst_rel));
-    }
 
     Ok(())
 }

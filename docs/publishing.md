@@ -13,6 +13,7 @@ depend on it being published), then PyPI, then nixpkgs.
 - [x] All CI workflows green on `main` (Rust, Go, C, Python, REUSE).
 - [x] `CHANGELOG.md` has a dated release entry for the version being published.
 - [x] Git tag `v0.2.1` created and pushed.
+- [x] Git tag `v0.2.2` created and pushed.
 
 ---
 
@@ -20,12 +21,12 @@ depend on it being published), then PyPI, then nixpkgs.
 
 ### 1a. `base91-rs` library crate — DONE
 
-- [x] Published at `https://crates.io/crates/base91-rs` (latest: v0.2.1)
+- [x] Published at `https://crates.io/crates/base91-rs` (latest: v0.2.2)
 - Note: name `base91` was taken by `dnsl48`; published as `base91-rs`.
 
 ### 1b. `base91-cli` binary crate — DONE
 
-- [x] Published at `https://crates.io/crates/base91-cli` (latest: v0.2.1)
+- [x] Published at `https://crates.io/crates/base91-cli` (latest: v0.2.2)
 
 ---
 
@@ -34,7 +35,7 @@ depend on it being published), then PyPI, then nixpkgs.
 - [x] PyPI project `pybase91` created.
 - [x] Trusted Publisher configured: owner `douzebis`, repo `base91`,
   workflow `pypi.yml`, environment `pypi`.
-- [x] Published at `https://pypi.org/project/pybase91/` (latest: v0.2.1)
+- [x] Published at `https://pypi.org/project/pybase91/` (latest: v0.2.2)
 - Wheels: Linux x86_64 + aarch64 (manylinux_2_36), macOS x86_64 + aarch64,
   sdist. Python 3.11–3.13.
 
@@ -52,12 +53,12 @@ The derivation has been tested locally and builds successfully.
   { lib, rustPlatform, installShellFiles }:
   rustPlatform.buildRustPackage {
     pname   = "base91";
-    version = "0.2.1";
+    version = "0.2.2";
 
     src = fetchFromGitHub {
       owner = "douzebis";
       repo  = "base91";
-      rev   = "v0.2.1";
+      rev   = "v0.2.2";
       hash  = ""; # TODO: compute with nix-prefetch-url or nix hash
     } + "/rust";
 
@@ -92,7 +93,7 @@ The derivation has been tested locally and builds successfully.
   ```
 - [ ] Add `douzebis` to `maintainers/maintainer-list.nix` if not present.
 - [ ] Build and test locally against nixpkgs master.
-- [ ] Open PR: `base91: init at 0.2.1`.
+- [ ] Open PR: `base91: init at 0.2.2`.
 - [ ] Respond to reviewer feedback. Merge time typically 2–6 weeks.
 
 ---
@@ -101,8 +102,8 @@ The derivation has been tested locally and builds successfully.
 
 | Registry  | Package      | Status |
 |-----------|--------------|--------|
-| crates.io | `base91-rs`  | published v0.2.1 |
-| crates.io | `base91-cli` | published v0.2.1 |
-| PyPI      | `pybase91`   | published v0.2.1 |
+| crates.io | `base91-rs`  | published v0.2.2 |
+| crates.io | `base91-cli` | published v0.2.2 |
+| PyPI      | `pybase91`   | published v0.2.2 |
 | Go proxy  | `github.com/douzebis/base91/go` | live (automatic on tag) |
 | nixpkgs   | `base91`     | PR not yet opened |

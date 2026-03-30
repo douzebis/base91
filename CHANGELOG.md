@@ -17,6 +17,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.2] - 2026-03-30
+
+### Changed
+
+- `simd::decode`, `simd::decode_unchecked`, and `io::DecoderReader` now
+  auto-detect the stream format: a leading `-` byte selects the SIMD path;
+  any other first byte falls back to the Henke codec.  Plain `base91 -d`
+  (and the library's `DecoderReader`) now decode both SIMD and Henke streams
+  transparently — no `--simd` flag needed at decode time.
+
+---
+
 ## [0.2.1] - 2026-03-28
 
 ### Added
@@ -98,7 +110,8 @@ implementation at <http://base91.sourceforge.net/>.
 Original C implementation by Joachim Henke.
 Source preserved unchanged in `src/`.
 
-[Unreleased]: https://github.com/douzebis/base91/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/douzebis/base91/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/douzebis/base91/releases/tag/v0.2.2
 [0.2.1]: https://github.com/douzebis/base91/releases/tag/v0.2.1
 [0.2.0]: https://github.com/douzebis/base91/releases/tag/v0.2.0
 [0.1.0]: http://base91.sourceforge.net/
