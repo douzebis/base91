@@ -197,20 +197,22 @@ pub fn encode(input: &[u8], max_level: SimdLevel, wrap: usize) -> Vec<u8> {
     out
 }
 
-/// Decode a SIMD-variant stream (starting with `-`) to binary bytes.
+/// Decode `input`, auto-detecting the format from the first byte.
 ///
-/// Returns `None` if `input` does not start with `-`.
-/// `max_level` caps the SIMD kernel used.
+/// A leading `-` indicates a SIMD fixed-width stream; anything else is decoded
+/// as a Henke stream.  Always succeeds (returns `Some`); invalid bytes in a
+/// SIMD stream silently corrupt output.  `max_level` caps the SIMD kernel used.
 pub fn decode(input: &[u8], max_level: SimdLevel) -> Option<Vec<u8>> {
     if input.is_empty() {
         return Some(Vec::new());
     }
-    let payload = input.strip_prefix(b"-")?;
-    let mut out = Vec::with_capacity(decode_size_hint(payload.len()));
-    if !decode_into(payload, max_level, &mut out) {
-        return None;
+    if let Some(payload) = input.strip_prefix(b"-") {
+        let mut out = Vec::with_capacity(decode_size_hint(payload.len()));
+        decode_into(payload, max_level, &mut out);
+        Some(out)
+    } else {
+        Some(crate::decode(input))
     }
-    Some(out)
 }
 
 /// Encode `input` into a caller-provided buffer without bounds checking.
@@ -234,20 +236,23 @@ pub unsafe fn encode_unchecked(
 }
 
 /// Decode into a caller-provided buffer without bounds checking.
-/// Returns bytes written, or `usize::MAX` if input does not start with `-`.
+///
+/// Auto-detects format: a leading `-` selects the SIMD path; otherwise falls
+/// back to Henke.  Returns bytes written.
 ///
 /// # Safety
 /// `output` must point to at least `decode_size_hint(input.len())`
 /// writable bytes.
 pub unsafe fn decode_unchecked(input: &[u8], max_level: SimdLevel, output: *mut u8) -> usize {
-    let Some(payload) = input.strip_prefix(b"-") else {
-        return usize::MAX;
-    };
-    let mut out = Vec::from_raw_parts(output, 0, decode_size_hint(input.len()));
-    decode_into(payload, max_level, &mut out);
-    let n = out.len();
-    std::mem::forget(out);
-    n
+    if let Some(payload) = input.strip_prefix(b"-") {
+        let mut out = Vec::from_raw_parts(output, 0, decode_size_hint(input.len()));
+        decode_into(payload, max_level, &mut out);
+        let n = out.len();
+        std::mem::forget(out);
+        n
+    } else {
+        crate::decode_unchecked(input, output)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -618,9 +623,12 @@ mod tests {
     }
 
     #[test]
-    fn no_prefix_returns_none() {
-        let encoded = encode(b"test", SimdLevel::default(), 0);
-        assert!(decode(&encoded[1..], SimdLevel::default()).is_none());
+    fn non_simd_input_falls_back_to_henke() {
+        // Input without '-' prefix is treated as a Henke stream.
+        let henke_encoded = crate::encode(b"test");
+        let decoded =
+            decode(&henke_encoded, SimdLevel::default()).expect("Henke fallback must succeed");
+        assert_eq!(decoded, b"test");
     }
 
     #[test]

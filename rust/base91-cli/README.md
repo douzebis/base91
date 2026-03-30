@@ -53,7 +53,7 @@ base91 -d file.b91 > file.bin
 
 # Encode / decode with the SIMD variant
 base91 --simd file.bin > file.b91s
-base91 --simd -d file.b91s > file.bin
+base91 -d file.b91s > file.bin
 
 # Pipe-friendly aliases (no line wrapping)
 b91enc < file.bin > file.b91
@@ -70,8 +70,8 @@ When invoked as `b91dec`, the default is decode.
 ## SIMD variant
 
 `--simd` selects a non-Henke fixed-width 13-bit block format that enables
-SIMD parallelism.  The output is **not wire-compatible** with the Henke format
-and must be decoded with `base91 --simd -d`.
+SIMD parallelism.  The output is **not wire-compatible** with the Henke format,
+but the decoder auto-detects the format — plain `base91 -d` decodes both.
 
 - Output begins with `-` to distinguish it from Henke streams.
 - Alphabet: 0x23–0x26, 0x28–0x7E (91 contiguous printable ASCII chars,

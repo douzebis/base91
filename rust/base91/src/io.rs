@@ -6,8 +6,9 @@
 
 use std::io::{self, BufWriter, Read, Write};
 
-use crate::codec::{Decoder, Encoder};
+use crate::codec::Encoder;
 use crate::encode_size_hint;
+use crate::simd::Decoder;
 
 const BUF_SIZE: usize = 8 * 1024;
 
@@ -84,11 +85,11 @@ impl<W: Write> Write for EncoderWriter<W> {
 // DecoderReader
 // ---------------------------------------------------------------------------
 
-/// A [`Read`] adapter that basE91-decodes data pulled from an inner reader.
+/// A [`Read`] adapter that decodes data pulled from an inner reader.
 ///
-/// Reads encoded bytes from the inner reader in 8 KiB chunks, decodes them,
-/// and serves the decoded bytes to the caller.  Non-alphabet bytes (e.g.
-/// newlines) are silently skipped, matching the C reference behaviour.
+/// The format is detected automatically from the first byte: a leading `-`
+/// selects the SIMD fixed-width variant; anything else is decoded as a Henke
+/// stream.  Non-alphabet bytes (e.g. newlines) are silently skipped.
 ///
 /// # Example
 ///
@@ -117,7 +118,7 @@ impl<R: Read> DecoderReader<R> {
     /// Create a new `DecoderReader` wrapping `inner`.
     pub fn new(inner: R) -> Self {
         Self {
-            decoder: Decoder::new(),
+            decoder: Decoder::new(crate::simd::SimdLevel::default()),
             inner,
             decoded: Vec::with_capacity(BUF_SIZE),
             decoded_pos: 0,

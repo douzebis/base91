@@ -85,10 +85,11 @@ struct Cli {
     /// Use the SIMD fixed-width variant for encoding.
     ///
     /// Output begins with '-' and uses the SIMD alphabet (0x23-0x26,
-    /// 0x28-0x7E); not compatible with legacy Henke decoders. Output
-    /// contains no single-quote characters and is safe to single-quote
-    /// in shell. Ignored when decoding. With --wrap, the value must be
-    /// a multiple of 32.
+    /// 0x28-0x7E); not compatible with legacy Henke decoders. The
+    /// format is auto-detected at decode time, so plain -d works for
+    /// both SIMD and Henke streams. Output contains no single-quote
+    /// characters and is safe to single-quote in shell. Ignored when
+    /// decoding. With --wrap, the value must be a multiple of 32.
     #[arg(long)]
     simd: bool,
 
@@ -262,33 +263,6 @@ fn compute_ibuf_encode(buf_size: usize) -> usize {
 // Decode path
 // ---------------------------------------------------------------------------
 
-fn do_decode_simd(
-    input: &mut dyn Read,
-    output: &mut dyn Write,
-    buf_size: usize,
-) -> io::Result<usize> {
-    let ibuf_size = buf_size.max(1);
-    let mut ibuf = vec![0u8; ibuf_size];
-    let mut raw: Vec<u8> = Vec::new();
-    loop {
-        let n = input.read(&mut ibuf)?;
-        if n == 0 {
-            break;
-        }
-        raw.extend_from_slice(&ibuf[..n]);
-    }
-    let decoded =
-        base91::simd::decode(&raw, base91::simd::SimdLevel::default()).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "not a SIMD stream (missing '-' prefix)",
-            )
-        })?;
-    let total = decoded.len();
-    output.write_all(&decoded)?;
-    Ok(total)
-}
-
 fn do_decode(input: &mut dyn Read, output: &mut dyn Write, buf_size: usize) -> io::Result<usize> {
     let ibuf_size = compute_ibuf_decode(buf_size);
     let mut ibuf = vec![0u8; ibuf_size];
@@ -398,13 +372,7 @@ fn run() -> io::Result<()> {
     let mut input = open_input(cli.file.as_deref())?;
     let mut output = open_output(ofile)?;
 
-    if decode && simd {
-        let ototal = do_decode_simd(&mut *input, &mut *output, buf_size)?;
-        output.flush()?;
-        if verbose >= 1 {
-            eprintln!("\tdone ({ototal} bytes, SIMD variant)");
-        }
-    } else if decode {
+    if decode {
         let ototal = do_decode(&mut *input, &mut *output, buf_size)?;
         output.flush()?;
         if verbose >= 1 {

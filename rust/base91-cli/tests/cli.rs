@@ -252,7 +252,7 @@ fn simd_round_trip() {
     let input = b"Hello, world!";
     let (encoded, _, status) = run(&["--simd"], input);
     assert!(status.success());
-    let (decoded, _, status2) = run(&["--simd", "-d"], &encoded);
+    let (decoded, _, status2) = run(&["-d"], &encoded);
     assert!(status2.success());
     assert_eq!(decoded, input);
 }
@@ -262,7 +262,7 @@ fn simd_round_trip_binary() {
     let input: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
     let (encoded, _, status) = run(&["--simd"], &input);
     assert!(status.success());
-    let (decoded, _, status2) = run(&["--simd", "-d"], &encoded);
+    let (decoded, _, status2) = run(&["-d"], &encoded);
     assert!(status2.success());
     assert_eq!(decoded, input);
 }
@@ -302,24 +302,28 @@ fn simd_output_contains_no_double_quote() {
 }
 
 #[test]
-fn simd_decode_requires_simd_flag() {
-    // --simd -d decodes SIMD streams; plain -d does not (Henke decoder).
+fn decode_auto_detects_simd_stream() {
+    // Plain -d must auto-detect and correctly decode a SIMD-encoded stream.
     let input: Vec<u8> = (0u8..=255).cycle().take(256).collect();
     let (encoded, _, status) = run(&["--simd", "-w", "0"], &input);
     assert!(status.success());
-    // SIMD-encoded stream decodes correctly with --simd -d.
-    let (decoded, _, s) = run(&["--simd", "-d"], &encoded);
-    assert!(s.success(), "--simd -d must succeed on a SIMD stream");
-    assert_eq!(decoded, input);
-    // Plain -d (Henke decoder) rejects a SIMD stream (missing '-' prefix check
-    // is in Henke decoder, which just treats '-' as a non-alphabet byte and
-    // silently produces wrong or empty output — not an error per se, but the
-    // round-trip must not equal the original input).
-    let (henke_decoded, _, _) = run(&["-d"], &encoded);
-    assert_ne!(
-        henke_decoded, input,
-        "Henke -d must not correctly decode a SIMD stream"
+    let (decoded, _, s) = run(&["-d"], &encoded);
+    assert!(s.success(), "-d must succeed on a SIMD stream");
+    assert_eq!(
+        decoded, input,
+        "-d must auto-detect SIMD and round-trip correctly"
     );
+}
+
+#[test]
+fn decode_auto_detects_henke_stream() {
+    // Plain -d must correctly decode a Henke-encoded stream (no regression).
+    let input: Vec<u8> = (0u8..=255).cycle().take(256).collect();
+    let (encoded, _, status) = run(&["-w", "0"], &input);
+    assert!(status.success());
+    let (decoded, _, s) = run(&["-d"], &encoded);
+    assert!(s.success(), "-d must succeed on a Henke stream");
+    assert_eq!(decoded, input, "-d must correctly decode Henke stream");
 }
 
 #[test]
@@ -386,7 +390,7 @@ fn simd_round_trip_with_wrap() {
     for line in lines {
         assert!(line.len() <= 32, "line len {} > 32", line.len());
     }
-    let (decoded, _, status2) = run(&["--simd", "-d"], &encoded);
+    let (decoded, _, status2) = run(&["-d"], &encoded);
     assert!(status2.success());
     assert_eq!(decoded, input);
 }
@@ -396,7 +400,7 @@ fn simd_fixture_round_trip() {
     let input = fixture("rnd0.dat");
     let (encoded, _, status) = run(&["--simd", "-w", "0"], &input);
     assert!(status.success());
-    let (decoded, _, status2) = run(&["--simd", "-d"], &encoded);
+    let (decoded, _, status2) = run(&["-d"], &encoded);
     assert!(status2.success());
     assert_eq!(decoded, input);
 }
@@ -426,8 +430,8 @@ fn simd_round_trip_sizes_0_to_32() {
         let input = &pattern[..len];
         let (encoded, _, s1) = run(&["--simd", "-w", "0"], input);
         assert!(s1.success(), "simd encode failed at len={len}");
-        let (decoded, _, s2) = run(&["--simd", "-d"], &encoded);
-        assert!(s2.success(), "simd decode failed at len={len}");
+        let (decoded, _, s2) = run(&["-d"], &encoded);
+        assert!(s2.success(), "simd auto-detect decode failed at len={len}");
         assert_eq!(decoded, input, "simd round-trip mismatch at len={len}");
     }
 }

@@ -55,7 +55,7 @@ shell.
 base91 file.bin > file.b91          # encode (Henke, wrap at 64 cols)
 base91 -d file.b91 > file.bin       # decode
 base91 --simd file.bin > file.b91s  # encode with SIMD variant
-base91 --simd -d file.b91s > file.bin
+base91 -d file.b91s > file.bin      # decode either format (auto-detected)
 b91enc < file.bin > file.b91        # encode with no line wrapping
 b91dec < file.b91 > file.bin        # decode
 ```
