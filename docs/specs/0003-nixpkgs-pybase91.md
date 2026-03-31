@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0003 — Publish `pybase91` to nixpkgs
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** —
+**Implemented in:** 2026-03-31
 
 ## Problem
 
