@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+# SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 #
 # SPDX-License-Identifier: MIT
 
@@ -19,15 +19,3 @@ SPDX-License-Identifier = "MIT"
 path = "rust/base91/tests/fixtures/**"
 SPDX-FileCopyrightText = "2006 Joachim Henke"
 SPDX-License-Identifier = "BSD-3-Clause"
-
-[[annotations]]
-path = [
-    "rust/base91/man/man3/basE91.3",
-    "rust/base91/man/man3/basE91_init.3",
-    "rust/base91/man/man3/basE91_encode.3",
-    "rust/base91/man/man3/basE91_encode_end.3",
-    "rust/base91/man/man3/basE91_decode.3",
-    "rust/base91/man/man3/basE91_decode_end.3",
-]
-SPDX-FileCopyrightText = "2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)"
-SPDX-License-Identifier = "MIT"
