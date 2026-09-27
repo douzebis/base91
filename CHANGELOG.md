@@ -15,6 +15,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.2.3] - 2026-09-27
+
 ### Security
 
 - `simd::encode_unchecked` and `simd::decode_unchecked` (`base91-rs`
@@ -181,7 +185,8 @@ implementation at <http://base91.sourceforge.net/>.
 Original C implementation by Joachim Henke.
 Source preserved unchanged in `src/`.
 
-[Unreleased]: https://github.com/douzebis/base91/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/douzebis/base91/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/douzebis/base91/releases/tag/v0.2.3
 [0.2.2]: https://github.com/douzebis/base91/releases/tag/v0.2.2
 [0.2.1]: https://github.com/douzebis/base91/releases/tag/v0.2.1
 [0.2.0]: https://github.com/douzebis/base91/releases/tag/v0.2.0
