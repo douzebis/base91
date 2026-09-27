@@ -24,14 +24,30 @@ them against an independent oracle on SSE4.1, AVX2 and NEON. Everything
   bug 3), streaming (bugs 1, 2, 4), buffer handling (spec 0005; bug 5), the
   `io` reader (bug 6).
 - **Wrapping is bolted on after the fact.** The encoder encodes flat, then
-  shifts the whole output right, a byte at a time, to open gaps for the
-  newlines (`insert_wrap_newlines`). The decoder copies the whole input
-  through a byte-by-byte filter to remove them. Measured on 4 MiB at
-  `Simd256`: encode 1.46 ms unwrapped, 4.90 ms at W = 64 (+235 %); decode
-  1.24 ms unwrapped, 6.82 ms at W = 64 (+450 %). Even a `memcpy` per line
-  would cost 2.5× the whole decode. Wrapped SIMD decoding, the CLI default,
-  runs at about legacy speed. The format was designed so that this costs
-  nothing (W a multiple of 32, spec 0008 §3.4); the code never uses it.
+  shifts the output right to open gaps for the newlines
+  (`insert_wrap_newlines`). The one-shot decoder copies the whole input
+  through a byte-by-byte filter to remove them; the streaming decoder splits
+  each chunk on newlines. Measured on 4 MiB at `Simd256` in 0.2.2: encode
+  1.46 ms unwrapped, 4.90 ms at W = 64 (+235 %); decode 1.24 ms unwrapped,
+  6.82 ms at W = 64 (+450 %). Even a `memcpy` per line would cost 2.5× the
+  whole decode.
+
+  0.2.3 (spec 0006) moves whole lines instead of bytes when wrapping, and
+  carries the streaming state across chunks. Measured on 1 MiB, one pinned
+  vCPU: encode 325 µs unwrapped, 425 µs at W = 64 (+31 %); one-shot decode
+  296 µs unwrapped, 1.69 ms at W = 64 (+470 %, unchanged); streaming decode
+  302 µs unwrapped, 871 µs at W = 64. Wrapped SIMD decoding, the CLI
+  default, still runs at a fraction of unwrapped speed. The format was
+  designed so that this costs nothing (W a multiple of 32, spec 0008 §3.4);
+  the code never uses it.
+- **The kernels' validity check misses most invalid bytes.** It compares
+  the computed index with 90 using a *signed* byte comparison, so every
+  byte whose index wraps below zero passes: all bytes below `0x23`
+  (including CR, LF and space) and most bytes from `0x80`. `'` (`0x27`,
+  outside the alphabet) maps to the index of `&` and passes too. Checked
+  on 0.2.3: CR, space, `'` and `0xFF` inside a block are accepted by the
+  SSE4.1 and AVX2 kernels; `0x7F` is rejected. (The comments in
+  `decode_block_*` claim these bytes are caught.)
 - **Invalid input silently becomes garbage** (spec 0008 annex A9–A13b):
   no errors, CR LF and leading whitespace mishandled, pairs above 8191
   spilled into the next group.
@@ -86,6 +102,18 @@ kernels. This spec replaces that loop.
    `SimdLevel::Scalar` does not, and it is how spec 0006 bug 2 was
    reachable.
 5. The AVX2 / kernel-speed question is tracked separately (spec 0011).
+6. **Slice API naming: `encode_slice` / `decode_slice` / `finish_slice`**,
+   as in the `base64` crate (`Engine::encode_slice`), rather than spec
+   0007's `*_to_slice`.
+7. **The 3 % validation budget (§4) is measured once**, with a temporary
+   patch that disables the checks (reverted, result recorded here), not
+   with a permanent feature.
+8. **Stage 1 maps errors onto today's API**: invalid input makes
+   `simd::decode` return `None` and `simd::Decoder::decode` return `false`
+   (instead of garbage) until stage 2 introduces `Result`. Only 0.3.0, with
+   all stages, is released.
+9. **One commit per stage**, each with every check passing. Stage 1
+   starts with the kernel validation fix (§5) and its tests.
 
 ## Specification
 
@@ -123,14 +151,14 @@ compare them exactly.
 |---|---|
 | `simd::encode(input, level, wrap) -> Result<Vec<u8>, Error>` | was `Vec<u8>`; `InvalidWidth` |
 | `simd::decode(input, level) -> Result<Vec<u8>, Error>` | was `Option<Vec<u8>>`; strict |
-| `simd::encode_to_slice(input, level, wrap, out: &mut [u8]) -> Result<usize, Error>` | new, no `alloc` |
-| `simd::decode_to_slice(input, level, out: &mut [u8]) -> Result<usize, Error>` | new, no `alloc` |
+| `simd::encode_slice(input, level, wrap, out: &mut [u8]) -> Result<usize, Error>` | new, no `alloc` |
+| `simd::decode_slice(input, level, out: &mut [u8]) -> Result<usize, Error>` | new, no `alloc` |
 | `simd::encoded_len(n, wrap) -> Result<usize, Error>` | new: E(n, W), exact (spec 0008 §3.4) |
 | `simd::encode_size_hint`, `simd::decode_size_hint` | kept (upper bounds) |
 | `simd::Encoder::new(level, wrap) -> Result<Self, Error>` | was `new(level)`; **gains wrapping** |
-| `simd::Encoder::{encode, encode_to_slice, finish, finish_to_slice}` | slice variants new |
+| `simd::Encoder::{encode, encode_slice, finish, finish_slice}` | slice variants new |
 | `simd::Decoder::decode(&mut self, input, &mut Vec) -> Result<(), Error>` | was `bool`; strict |
-| `simd::Decoder::{decode_to_slice, finish, finish_to_slice}` | `finish` → `Result`: the last line and the payload length are only validated at the end |
+| `simd::Decoder::{decode_slice, finish, finish_slice}` | `finish` → `Result`: the last line and the payload length are only validated at the end |
 | `simd::encode_unchecked`, `simd::decode_unchecked` | deprecated; core-based, zero-copy |
 | `simd::scalar` | `pub(crate)` |
 
@@ -139,7 +167,7 @@ compare them exactly.
 | Function | Change |
 |---|---|
 | `encode`, `decode`, `Encoder`, `Decoder` | unchanged |
-| `encode_to_slice`, `decode_to_slice`, `Encoder::encode_to_slice` / `finish_to_slice`, `Decoder::decode_to_slice` / `finish_to_slice` | new, no `alloc`; only `BufferTooSmall` |
+| `encode_slice`, `decode_slice`, `Encoder::encode_slice` / `finish_slice`, `Decoder::decode_slice` / `finish_slice` | new, no `alloc`; only `BufferTooSmall` |
 | `encode_unchecked`, `decode_unchecked` | deprecated; core-based |
 
 **`io`:** `DecoderReader` returns `io::Error` of kind `InvalidData`, wrapping
@@ -148,10 +176,10 @@ compare them exactly.
 **Slice-API rules** (from spec 0007):
 - Each call checks `out.len()` against the required size **before writing
   anything**. On error, `out` and the encoder/decoder state are untouched.
-- Streaming `finish_to_slice` takes `&mut self`, so that `BufferTooSmall`
+- Streaming `finish_slice` takes `&mut self`, so that `BufferTooSmall`
   does not consume the state. On success it resets the state.
 - The required sizes are the size hints (upper bounds), except
-  `encode_to_slice`, which needs exactly E(n, W).
+  `encode_slice`, which needs exactly E(n, W).
 
 **Without `alloc`** (spec 0004 feature layout): the whole slice API, the
 streaming types' slice methods, `Error`, the length functions, and
@@ -188,8 +216,11 @@ No `reserve`, no `Vec` and no allocation below the API layer.
 **Decode driver:**
 - **Classification** (spec 0008 §2): skip whitespace; `-` → SIMD;
   otherwise the legacy codec, unchanged.
-- **Layout**: if the byte after `-` starts a terminator, the stream is
-  wrapped. The terminator (LF or CR LF) and W (the length of the first
+- **Layout**: decided by the header, never by scanning the payload. If
+  the byte after `-` starts a terminator, the stream is wrapped; otherwise
+  it is unwrapped, and the driver never looks for a terminator again: a
+  stray one is an invalid block, caught by the kernels' validity check
+  (§5), not by a search. For a wrapped stream, the terminator (LF or CR LF) and W (the length of the first
   line) are fixed from then on. Line k's content and its terminator are at
   known positions, so the driver checks **one terminator per line**, and
   runs the kernels on each line's blocks **in place**, writing output at
@@ -201,8 +232,9 @@ No `reserve`, no `Vec` and no allocation below the API layer.
   whitespace) are checked at the end. On any failure, a scalar re-scan of
   the failing region produces the precise `Error` (§1).
 - **Streaming** (spec 0008 §3.6): state is the classification, the header
-  and terminator progress, W once known, the column, and a **16-byte carry
-  buffer** for a block split across calls (no heap). Whole blocks inside a
+  and terminator progress (a first chunk of just `-` leaves the layout
+  undecided until the next byte), W once known, the column, and a
+  **16-byte carry buffer** for a block split across calls (no heap). Whole blocks inside a
   chunk are decoded in place; only a split block goes through the carry
   buffer. Chunking-invariant by construction: the same bytes and the same
   error (class and offset) for any split.
@@ -213,6 +245,12 @@ which overwrites the slack. The last block goes through a 16-byte stack
 buffer when fewer than 3 bytes of space remain. Size hints stay tight.
 
 ### 4 — Performance
+
+**Baseline first.** Before the rewrite, measure on 0.2.3 what the
+newline search costs on unwrapped input: one-shot decode with and without
+its `contains(&b'\n')` scan (a temporary patch, reverted), same pinned
+CPU. The rewrite removes that scan (§3); the measurement says how much of
+the unwrapped speedup to expect from it.
 
 Measured with `tests/perf_sanity.rs` (`rust-perf`) and `criterion`, against
 0.2.3 on the same machine:
@@ -227,11 +265,20 @@ Measured with `tests/perf_sanity.rs` (`rust-perf`) and `criterion`, against
 
 ### 5 — Kernel interface changes
 
-The kernels keep their block-level contract, with one addition. **The decode
-kernels must reject pairs worth more than 8191** (spec 0008 *invalid
-value*): one extra vector comparison per block, folded into the validity
-they already return. Whether today's kernels already catch it is to be
-checked first. Other kernel work (e.g. the per-block call through a
+The kernels keep their block-level contract, with two changes to the
+validity they return:
+
+- **Correct character validation.** Replace the signed comparison with
+  an unsigned range check on the index (e.g. `min_epu8` / `max_epu8`, or a
+  saturating subtraction), and reject `0x27` explicitly. Every byte outside
+  the alphabet must fail its block, CR, LF and space included: the
+  unwrapped fast path relies on it to catch stray terminators (§3).
+- **Reject pairs worth more than 8191** (spec 0008 *invalid value*): one
+  extra vector comparison per block. Today's kernels do not check it.
+
+Both fold into one validity mask per block. The early return after each
+block becomes an accumulated mask, checked by the driver once per line or
+per call (§3). Other kernel work (e.g. the per-block call through a
 function pointer, which spec 0011 lists as a performance suspect) belongs to
 spec 0011.
 
@@ -256,8 +303,12 @@ spec 0011.
 - Add the slice API, the new `simd::Encoder` wrapping, and `io` error
   reporting to the matrix, properties and fuzz targets; add buffer-too-small
   cases (state and output untouched).
-- Move the spec 0006 bug-2 regression test into the crate's unit tests
-  (`simd::scalar` is no longer public).
+- Delete the spec 0006 bug-2 regression test from `tests/regressions.rs`
+  (`simd::scalar` is no longer public); the unit tests in `simd/scalar.rs`
+  (`decoder_chunk_size_1`, `decoder_chunk_independence`) already cover it.
+- Kernel unit tests: every byte value outside the alphabet, at every
+  position of a block, fails that block, at every level; pairs worth
+  8192 … 8280 fail too.
 - Raise `perf_sanity`'s wrapped thresholds (§4).
 - The no-`alloc` build (spec 0004 §7, `wasm32v1-none`) must include the
   slice API.
@@ -294,9 +345,7 @@ spec 0011.
 
 ## Open questions
 
-1. **Naming of the slice API** (carried over from spec 0007):
-   `encode_to_slice` / `decode_to_slice`, or `encode_slice` /
-   `decode_slice` as in the `base64` crate?
+None.
 
 ## Verification
 
