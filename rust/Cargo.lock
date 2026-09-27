@@ -99,6 +99,7 @@ name = "base91-cli"
 version = "0.2.2"
 dependencies = [
  "base91-rs",
+ "base91-testkit",
  "clap",
  "clap_complete",
  "clap_mangen",

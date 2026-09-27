@@ -15,11 +15,18 @@ let
   # ---------------------------------------------------------------------------
   # CRANE (Rust build framework)
   # ---------------------------------------------------------------------------
-  crane = pkgs.callPackage (pkgs.fetchgit {
+  cranePath = pkgs.fetchgit {
     url    = "https://github.com/ipetkov/crane.git";
     rev    = "80ceeec0dc94ef967c371dcdc56adb280328f591";
     sha256 = "sha256-e1idZdpnnHWuosI3KsBgAgrhMR05T2oqskXCmNzGPq0=";
-  }) { inherit pkgs; };
+  };
+  crane = pkgs.callPackage cranePath { inherit pkgs; };
+
+  # A second crane instance built from the aarch64 cross package set: its
+  # derivations target aarch64-unknown-linux-gnu by themselves and, when
+  # running tests, use qemu user-mode as the cargo runner (spec 0009 §8).
+  aarch64Pkgs  = pkgs.pkgsCross.aarch64-multiplatform;
+  craneAarch64 = aarch64Pkgs.callPackage cranePath { pkgs = aarch64Pkgs; };
 
   # ---------------------------------------------------------------------------
   # PYTHON INTERPRETER (for PyO3 extension)
@@ -42,8 +49,12 @@ let
   };
 
   # Test and lint derivations compile the upstream reference (needs the C
-  # compiler of stdenv) so the legacy-oracle tests run in CI.
-  referenceTestsFeature = "--features base91-rs/reference-tests";
+  # compiler of stdenv) so the legacy-oracle tests run in CI: the library
+  # comparisons (base91-rs) and the CLI comparisons (base91-cli). Cargo
+  # rejects features of packages a command does not select, so attributes
+  # selecting only the library use the first variable.
+  referenceTestsFeature    = "--features base91-rs/reference-tests";
+  referenceTestsFeatureAll = "--features base91-rs/reference-tests,base91-cli/reference-tests";
 
   # Source tree extended with src/base91.{c,h} for bench builds that enable
   # --features c-compat-tests.  The C files are placed at src/ relative to
@@ -80,7 +91,7 @@ let
   rustClippy = crane.cargoClippy (rustCommon // {
     pname                = "base91-clippy";
     cargoArtifacts       = rustDeps;
-    cargoClippyExtraArgs = "${referenceTestsFeature} -- --deny warnings";
+    cargoClippyExtraArgs = "${referenceTestsFeatureAll} -- --deny warnings";
   });
 
   # Tests run optimized (crane's release profile) but with debug assertions
@@ -97,7 +108,31 @@ let
   rustTests = crane.cargoTest (rustCommon // testEnv // {
     pname              = "base91-tests";
     cargoArtifacts     = rustDeps;
-    cargoTestExtraArgs = referenceTestsFeature;
+    cargoTestExtraArgs = referenceTestsFeatureAll;
+  });
+
+  # The library tests for aarch64, run under qemu user-mode: the only way
+  # the NEON kernels execute on x86_64 CI machines (spec 0009 §8). The CLI
+  # tests are left out: they start child processes, which qemu user-mode
+  # cannot run in the sandbox (no binfmt).
+  #
+  # The tests run in the *build* phase on purpose: stdenv skips the check
+  # phase when it cannot execute the host platform, so crane.cargoTest
+  # would succeed here without running a single test.
+  rustTestsAarch64 = craneAarch64.mkCargoDerivation (rustCommon // testEnv // {
+    pname          = "base91-tests-aarch64";
+    nativeBuildInputs = [ ];
+    cargoArtifacts = null;
+    buildPhaseCargoCommand = ''
+      cargoWithProfile test --locked -p base91-rs -p base91-testkit \
+        ${referenceTestsFeature} 2>&1 | tee test-output.txt
+      test "''${PIPESTATUS[0]}" -eq 0
+    '';
+    doCheck = false;
+    installPhaseCommand = ''
+      mkdir -p $out
+      cp test-output.txt $out/
+    '';
   });
 
   # The full differential matrix and property runs (spec 0009 §2, §11).
@@ -259,7 +294,7 @@ let
       pname   = "pybase91";
       version = "0.2.2";
       src     = rustSrc;
-      hash    = "sha256-XD4BcPo3Ntsx/tQSmaG+0b+EZhbS4ZDZklgu7ZQx/qM=";
+      hash    = "sha256-icmO5IgNrQj28ESjzss1jOSkoVUexC/fzACAQV0DEY8=";
     };
 
     # maturin must be invoked from the crate subdirectory (not the workspace root)
@@ -359,5 +394,6 @@ in
   rust-clippy   = rustClippy;
   rust-tests    = rustTests;
   rust-tests-full = rustTestsFull;
+  rust-tests-aarch64 = rustTestsAarch64;
   go-tests      = goTests;
 }

@@ -240,6 +240,25 @@ file arguments:
   from the vendored 0.6.0 sources), for encode with the default width 76,
   `-w`, `b91enc`/`b91dec` names, and decode.
 
+Implementation notes (phase 3):
+
+- **aarch64 (§8):** `rust-tests-aarch64` runs `cargo test` in the
+  derivation's *build* phase (`craneAarch64.mkCargoDerivation`), not the
+  check phase: stdenv silently skips the check phase when the build
+  machine cannot execute the host platform, so a cross `crane.cargoTest`
+  would pass without running anything. crane sets qemu user-mode as the
+  cargo runner itself. The test output is kept in `$out/test-output.txt`.
+  A matrix test (`detected_level_matches_the_cpu`) asserts that
+  `simd::detect()` is `Simd128` on aarch64, so a passing run means NEON
+  really ran.
+- **CLI (§9):** the tests live in `base91-cli/tests/end_to_end.rs`.
+  `base91-cli` has its own `reference-tests` feature (Cargo does not build
+  a dependency's dev-dependencies, so `base91-rs`'s feature cannot reach
+  them). The upstream CLI is exposed as `base91_testkit::REFERENCE_CLI`.
+  Workspace-wide attributes enable both features; attributes selecting
+  only the library enable `base91-rs`'s alone (Cargo rejects features of
+  unselected packages).
+
 ### 10 — Performance sanity test
 
 A small **relative** test, `tests/perf_sanity.rs`, `#[ignore]` by default

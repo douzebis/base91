@@ -132,6 +132,37 @@ impl Drop for Skipped {
 }
 
 // ---------------------------------------------------------------------------
+// Which kernels the matrix actually exercises
+// ---------------------------------------------------------------------------
+
+/// The level the dispatcher detects, checked against the CPU, so that a
+/// passing matrix really means the SIMD kernels ran (spec 0009 §8): on
+/// aarch64 (NEON is mandatory) it must be `Simd128`; on x86_64 it follows
+/// the CPU's AVX2 / SSE4.1 support. Printed for the CI log.
+#[test]
+fn detected_level_matches_the_cpu() {
+    let detected = simd::detect();
+    eprintln!("[matrix] simd::detect() = {detected:?}");
+    if cfg!(feature = "force-scalar") {
+        assert_eq!(detected, SimdLevel::Scalar);
+        return;
+    }
+    #[cfg(target_arch = "aarch64")]
+    assert_eq!(detected, SimdLevel::Simd128);
+    #[cfg(target_arch = "x86_64")]
+    {
+        let expected = if std::is_x86_feature_detected!("avx2") {
+            SimdLevel::Simd256
+        } else if std::is_x86_feature_detected!("sse4.1") {
+            SimdLevel::Simd128
+        } else {
+            SimdLevel::Scalar
+        };
+        assert_eq!(detected, expected);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SIMD format: encoders
 // ---------------------------------------------------------------------------
 
