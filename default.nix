@@ -290,6 +290,8 @@ let
       reuse
       # GitHub CLI
       gh
+      # Nix tooling
+      nix-update
       # Man page viewer
       mandoc
       # Profiling — samply works on Linux (perf_event_open) and macOS (ktrace)
