@@ -66,32 +66,37 @@ None of this was caught, because the existing tests:
 
 ### 1 — Independent oracles
 
-**SIMD format oracle.** A deliberately simple, bit-by-bit model of spec
-0008, written from the spec text only and sharing **no code** with the
-library (`rust/base91/tests/common/oracle.rs`):
+Both oracles live in **`rust/base91-testkit`**, an unpublished workspace
+crate used as a dev-dependency by `base91-rs` and `base91-cli`. A
+library crate avoids the `dead_code` warnings that shared modules under
+`tests/common/` would raise in every test binary not using all of them.
 
-- `oracle_encode(input, W) -> Vec<u8>`: §3.2 rules one bit at a time, then
-  §3.4 layout.
-- `oracle_decode(stream) -> Result<Vec<u8>, OracleError>`: §2
-  classification, §3.5 acceptance with the three error classes, §3.2
-  unpacking.
-- `oracle_len_encoded(n, W)` / `oracle_len_decoded(L)`: the §3.3 / §3.4
-  formulas.
-- Self-tests: a few hand-computed vectors (one per tail length
-  `n mod 13`, one wrapped stream, one per error class), written down in the
-  test file with their derivation.
+**SIMD format oracle** (`base91_testkit::oracle`). A deliberately simple,
+bit-by-bit model of spec 0008, written from the spec text only and sharing
+**no code** with the library:
+
+- `encode(input, W) -> Vec<u8>`: §3.2 rules one bit at a time, then §3.4
+  layout;
+- `classify(stream)` and `decode(stream) -> Result<Vec<u8>, DecodeError>`:
+  §2 classification, §3.5 acceptance with its error classes, §3.2
+  unpacking;
+- `payload_len(n)`, `encoded_len(n, W)`, `decoded_len(L)`: the §3.3 / §3.4
+  formulas;
+- self-tests (`base91-testkit/tests/oracle_selftest.rs`): hand-computed
+  vectors, written down with their derivation (bit order, both tail
+  forms, wrapped layouts, padding bits, every error class).
 
 Speed is irrelevant; obviousness is the requirement. Code review of the
 oracle is against spec 0008, line by line.
 
-**Legacy oracle.** The **pristine upstream basE91 0.6.0** C code
-(`base91.c`, `base91.h`, plus `cli.c` for the reference CLI of §9), not
-the optimized copy in `src/`. Vendored under
-`rust/base91/tests/reference/basE91-0.6.0/` with its provenance (see
-*Decisions recorded*), BSD-3-Clause, declared in `REUSE.toml` as imported
-files. It is compiled for tests through
-`build.rs`, with its symbols renamed as the existing `c-compat-tests`
-feature already does for `src/base91.c`.
+**Legacy oracle** (`base91_testkit::reference`, feature `reference`). The
+**pristine upstream basE91 0.6.0** C code (`base91.c`, `base91.h`, plus
+`cli.c` for the reference CLI of §9), not the optimized copy in `src/`.
+Vendored under `rust/base91-testkit/reference/basE91-0.6.0/` with its
+provenance (see *Decisions recorded*), BSD-3-Clause, declared in
+`REUSE.toml` as imported files. The testkit's `build.rs` compiles it (see
+*Decisions recorded*, item 2), and `reference_selftest.rs` checks the
+vendored files' hashes and the upstream fixtures.
 
 ### 2 — Differential matrix (every API against the oracle)
 
@@ -304,6 +309,39 @@ targets in the same change that introduces it.
 
 None.
 
+## Decisions recorded (implementation, agreed 2026-09-27)
+
+1. **Pending deviations.** The tests share one `pending` list. Each entry
+   names a known deviation from spec 0008 and the spec that removes it
+   (e.g. "wrapped output has no final LF, until spec 0006"). Checks consult
+   the list and skip exactly those comparisons. A fix deletes its entry,
+   which switches the checks on. Everything else is enforced from day one.
+2. **Building the C reference.** `base91-rs`'s `reference-tests` feature
+   enables `base91-testkit`'s `reference` feature, whose `build.rs`
+   compiles the vendored upstream `base91.c` with the `cc` crate. Its
+   global symbols (five functions, two tables) are renamed with a `ref_`
+   prefix through `-D` defines, so the sources stay pristine. Nix test and
+   clippy attributes enable it; plain `cargo test` works without a C
+   compiler. `c-compat-tests` (the optimized `src/base91.c`, for
+   benchmarks) is unchanged.
+3. **Reference CLI (§9).** Under the same feature, `base91-testkit`'s
+   `build.rs` builds the vendored `cli.c` + `base91.c` into an executable
+   in its build directory. CLI tests skip the comparison when the feature
+   is off.
+4. **aarch64 scope (§8).** `rust-tests-aarch64` runs the `base91-rs`
+   library and integration tests (where the NEON kernels run), not the CLI
+   tests: a child aarch64 process cannot run under qemu user-mode in the
+   Nix sandbox (no `binfmt`).
+5. **Reproducible randomness.** Random subsets use a seed that is printed
+   on failure and can be overridden with `BASE91_TEST_SEED`. In CI it is
+   derived from the commit, so reruns of a commit test the same cases.
+6. **Performance thresholds (§10)** are calibrated on the dev machine when
+   the test is written, at 70 % of the measured ratios, so the test
+   enforces them from the start.
+7. **Commits:** one per §13 phase. Each phase ends with `cargo fmt`,
+   `cargo clippy`, `reuse lint` and the Nix build of the affected
+   attributes.
+
 ## Decisions recorded (test dependencies and reference sources)
 
 - **`proptest` is accepted as a dev-dependency** (§5). The library stays
@@ -328,7 +366,7 @@ None.
   These three files are **byte-identical** to `src/base91.c`,
   `src/base91.h` and `src/cli.c` at tag `v0.1.0` of this repo (checked with
   `cmp`). The current `src/` copies differ (optimized in `ba47d9c`).
-  Vendored into `rust/base91/tests/reference/basE91-0.6.0/`: `base91.c`,
+  Vendored into `rust/base91-testkit/reference/basE91-0.6.0/`: `base91.c`,
   `base91.h`, `cli.c` (for the §9 reference CLI) and `LICENSE`, unmodified,
   with a `PROVENANCE` file giving the URLs, hashes and SWHIDs above. The
   vendored files are declared in `REUSE.toml` (`[[annotations]]`,

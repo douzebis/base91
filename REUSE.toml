@@ -19,3 +19,15 @@ SPDX-License-Identifier = "MIT"
 path = "rust/base91/tests/fixtures/**"
 SPDX-FileCopyrightText = "2006 Joachim Henke"
 SPDX-License-Identifier = "BSD-3-Clause"
+
+# Upstream basE91 0.6.0, vendored unmodified as the legacy-format test
+# oracle (spec 0009). Provenance: rust/base91-testkit/reference/basE91-0.6.0/PROVENANCE
+[[annotations]]
+path = [
+    "rust/base91-testkit/reference/basE91-0.6.0/base91.c",
+    "rust/base91-testkit/reference/basE91-0.6.0/base91.h",
+    "rust/base91-testkit/reference/basE91-0.6.0/cli.c",
+    "rust/base91-testkit/reference/basE91-0.6.0/LICENSE",
+]
+SPDX-FileCopyrightText = "2000-2006 Joachim Henke"
+SPDX-License-Identifier = "BSD-3-Clause"

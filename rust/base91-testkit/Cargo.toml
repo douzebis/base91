@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name        = "base91-testkit"
+version     = "0.0.0"
+edition     = "2021"
+rust-version = "1.91"
+description = "Test oracles for base91-rs: a bit-by-bit model of the wire format (spec 0008) and the upstream basE91 0.6.0 C reference (spec 0009)"
+license     = "MIT"
+publish     = false
+
+[features]
+# Compiles the vendored upstream basE91 0.6.0 (reference/basE91-0.6.0/) and
+# exposes it through `reference`. Needs a C compiler.
+reference = ["dep:cc"]
+
+[build-dependencies]
+cc = { version = "1", optional = true }
+
+[dev-dependencies]
+sha2 = "0.10"

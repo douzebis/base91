@@ -1,0 +1,30 @@
+Upstream basE91 0.6.0 by Joachim Henke, vendored unmodified.
+
+These files are the test oracle for the legacy format (spec 0008 section 4,
+spec 0009 section 1). They must never be edited. The test
+`vendored_reference_is_pristine` checks their sha256 against the table
+below.
+
+Release tarball
+  URL:    https://downloads.sourceforge.net/project/base91/basE91/0.6.0/base91-0.6.0.tar.gz
+  Size:   15009 bytes
+  sha256: 02cfae7322c1f865ca6ce8f2e0bb8d38c8513e76aed67bf1c94eab1343c6c651
+
+Files (from base91-0.6.0/ in the tarball), archived by Software Heritage:
+
+  base91.c  swh:1:cnt:3d9d7eaab6294bffff9bb152b5128c2b8f4820b9
+            sha256:ce6c825e24342271b525f2cecc5f70294047246963cc5361003326c9d6ce8290
+  base91.h  swh:1:cnt:7a44a60b357e749b24d543d12473977c74b4acb1
+            sha256:30d476141130aa6391a240c9b94e42e60f71b38f056a2a349fec9bc96562b6bf
+  cli.c     swh:1:cnt:f3659915368a1d514fbb6c56db88e9b01d0f48cc
+            sha256:a37ce4cebb71ad7e6d0c23157e651ec6848770fd6fb931706b70a2c044ba87d5
+  LICENSE   swh:1:cnt:e4a656c3d492a79494cfe554b1ae7562d3a7b6de
+            sha256:51f70a0b8d3df8662f97469234af3c8fbf780b8d853568ff9d32b56d6d4b996b
+
+Software Heritage resolves a SWHID at
+  https://archive.softwareheritage.org/<SWHID>
+
+The three source files are byte-identical to src/base91.c, src/base91.h
+and src/cli.c at tag v0.1.0 of this repository.
+
+Vendored on 2026-09-27.

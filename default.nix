@@ -24,15 +24,22 @@ let
   pythonExecutable = "${pythonBin}/bin/python3";
 
   # Source for pure-Rust builds (scoped to rust/ so C sources don't affect
-  # the hash).  The filter retains Cargo sources, binary test fixtures, and
-  # README.md files (maturin reads them from Cargo.toml's readme field).
+  # the hash).  The filter retains Cargo sources, binary test fixtures,
+  # README.md files (maturin reads them from Cargo.toml's readme field), and
+  # the vendored upstream basE91 0.6.0 used as the legacy test oracle
+  # (base91-testkit, spec 0009).
   rustSrc = pkgs.lib.cleanSourceWith {
     src    = pkgs.lib.cleanSource ./rust;
     filter = path: type:
       crane.filterCargoSources path type
       || builtins.match ".*/tests/fixtures/.*" path != null
+      || builtins.match ".*/base91-testkit/reference(/.*)?" path != null
       || builtins.match ".*/README\\.md$" path != null;
   };
+
+  # Test and lint derivations compile the upstream reference (needs the C
+  # compiler of stdenv) so the legacy-oracle tests run in CI.
+  referenceTestsFeature = "--features base91-rs/reference-tests";
 
   # Source tree extended with src/base91.{c,h} for bench builds that enable
   # --features c-compat-tests.  The C files are placed at src/ relative to
@@ -69,12 +76,13 @@ let
   rustClippy = crane.cargoClippy (rustCommon // {
     pname                = "base91-clippy";
     cargoArtifacts       = rustDeps;
-    cargoClippyExtraArgs = "-- --deny warnings";
+    cargoClippyExtraArgs = "${referenceTestsFeature} -- --deny warnings";
   });
 
   rustTests = crane.cargoTest (rustCommon // {
-    pname          = "base91-tests";
-    cargoArtifacts = rustDeps;
+    pname              = "base91-tests";
+    cargoArtifacts     = rustDeps;
+    cargoTestExtraArgs = referenceTestsFeature;
   });
 
   # ---------------------------------------------------------------------------
@@ -233,7 +241,7 @@ let
       pname   = "pybase91";
       version = "0.2.2";
       src     = rustSrc;
-      hash    = "sha256-X9hVLZ5+oVsPWihOxaAQQMLOJhejNBQnRQgdk1sp3Lw=";
+      hash    = "sha256-XD4BcPo3Ntsx/tQSmaG+0b+EZhbS4ZDZklgu7ZQx/qM=";
     };
 
     # maturin must be invoked from the crate subdirectory (not the workspace root)

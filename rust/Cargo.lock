@@ -110,12 +110,21 @@ name = "base91-rs"
 version = "0.2.2"
 dependencies = [
  "base91",
+ "base91-testkit",
  "cc",
  "criterion",
  "pyo3",
  "pyo3-stub-gen",
  "pyo3-stub-gen-derive",
  "rand",
+ "sha2",
+]
+
+[[package]]
+name = "base91-testkit"
+version = "0.0.0"
+dependencies = [
+ "cc",
  "sha2",
 ]
 

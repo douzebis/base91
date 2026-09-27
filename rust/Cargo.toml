@@ -3,5 +3,5 @@
 # SPDX-License-Identifier: MIT
 
 [workspace]
-members  = ["base91", "base91-cli"]
+members  = ["base91", "base91-cli", "base91-testkit"]
 resolver = "2"
