@@ -36,8 +36,7 @@ pub enum Deviation {
     /// SIMD decoders silently return wrong data for invalid input (or panic
     /// on an arithmetic overflow when overflow checks are on), and
     /// mishandle unusual but valid forms (CR LF, whitespace before `-`).
-    /// Fixed by the strict-decoder spec (spec 0008, annex A9–A13b; not
-    /// written yet).
+    /// Fixed by spec 0010 (driver rewrite; spec 0008 annex A9–A13b).
     SimdStrictDecoding,
 }
 

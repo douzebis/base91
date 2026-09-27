@@ -333,26 +333,27 @@ this spec. Where a fix is already specified, the spec is named.
 | # | Topic | Current behavior | This spec | Fix |
 |---|---|---|---|---|
 | A1 | Alphabet documentation | Spec 0002 says the alphabet omits `\` (0x5C). The code omits `'` (0x27): output contains `\` and never `'`. | Omits `'` (§3.1), matching the code, so published streams stay valid | Mark spec 0002's wire-format sections as superseded by this spec |
-| A2 | Allowed W | Spec 0002 says 16 (Goals) and 32 (body); rustdoc and CLI say 32 (the CLI enforces it); the library does not check W at all | Multiple of 32, enforced by encoders (library and CLI) | New: library validation |
+| A2 | Allowed W | Spec 0002 says 16 (Goals) and 32 (body); rustdoc and CLI say 32 (the CLI enforces it); the library does not check W at all | Multiple of 32, enforced by encoders (library and CLI) | Spec 0010 (`Error::InvalidWidth`) |
 | A3 | **Wrapped encoding when P(n) is a multiple of W** | **Corrupt output**: `-X` LF `X…` (the first payload character is duplicated before the header LF). Decoding gives one extra byte. Hits `base91 --simd` (default W = 64) for **every input whose size is a multiple of 52 bytes**; 478 of 15 005 (n, W) cases tested. Affected files can be repaired by deleting the character between `-` and the first LF. | §3.4 layout | Spec 0006, bug 3 |
 | A3b | Final LF of wrapped output | Not written | Written (§3.4) | Spec 0006 §4 (same function as A3) |
-| A4 | Wrapped encoder implementation | Encodes, then inserts newlines in a second pass that shifts the whole output (`insert_wrap_newlines`) | Blocks written in place (§3.4) | Spec 0007 (slice core) |
-| A5 | Empty input, streaming encoder | `simd::Encoder` writes `-` on the first `encode` call, even with empty input, so an empty stream becomes `-` (one-shot gives empty) | Prefix written lazily | New (small; fold into spec 0006) |
+| A4 | Wrapped encoder implementation | Encodes, then inserts newlines in a second pass that shifts the whole output (`insert_wrap_newlines`) | Blocks written in place (§3.4) | Spec 0010 (in-place layout) |
+| A5 | Empty input, streaming encoder | `simd::Encoder` writes `-` on the first `encode` call, even with empty input, so an empty stream becomes `-` (one-shot gives empty) | Prefix written lazily | Spec 0006, bug 4 |
 | A6 | Empty input, `simd::encode_unchecked` | Writes `-` | Empty | Spec 0005 |
 | A7 | Chunking invariance, decoder | Violated: `simd::Decoder` loses state at chunk boundaries; CLI `-d` corrupts SIMD streams ≥ 16 kB | §3.6 | Spec 0006, bug 1 |
 | A8 | Decoder bounded state | `ScalarDecoder` overflows its reservation with a pending character (heap corruption) | §3.6 | Spec 0006, bug 2 |
-| A9 | CR LF | `\r` decoded as data: **wrong output, no error** | Accepted (§3.5) | New |
-| A10 | Whitespace before `-` | Classified as legacy: **wrong output, no error** | Skipped (§2) | New |
-| A11 | Invalid characters | Decoded as garbage: **wrong output, no error** (with overflow checks on, as in debug builds, the scalar decoder instead panics on an arithmetic overflow); `Decoder::decode` returns `true`; `simd::decode` never returns `None` | Error | New (needs an error type; see spec 0007's `Error`) |
-| A12 | Invalid payload length (L mod 16 ∈ {1, 6, 11}) | Decoded silently (a lone character is flushed as a byte) | Error | New |
-| A13 | Irregular layouts | One-shot decode strips every LF anywhere (heap copy); anything else becomes garbage | Error (§3.5) | New |
-| A13b | Pair value above 8191 | The scalar decoder adds the value to its bit queue as is, so the 14th bit spills into the next group: **wrong output, no error** | Error, invalid value (§3.5) | New (with A9–A13) |
-| A14 | Sizes | `encode_size_hint` / `decode_size_hint` are upper bounds | Exact E and D exist (§3.3); APIs may expose them | Spec 0007 |
-| A15 | Legacy conformance | Encoder and decoder tested against the reference test vectors (`tests/reference_vectors.rs`, sha256 of the C `test.sh` fixtures). Decoding of garbage-laden input vs the reference is not explicitly tested. | §4 | New: differential test against upstream 0.6.0 with random junk inserted |
+| A9 | CR LF | `\r` decoded as data: **wrong output, no error** | Accepted (§3.5) | Spec 0010 |
+| A10 | Whitespace before `-` | Classified as legacy: **wrong output, no error** | Skipped (§2) | Spec 0010 |
+| A11 | Invalid characters | Decoded as garbage: **wrong output, no error** (with overflow checks on, as in debug builds, the scalar decoder instead panics on an arithmetic overflow); `Decoder::decode` returns `true`; `simd::decode` never returns `None` | Error | Spec 0010 |
+| A12 | Invalid payload length (L mod 16 ∈ {1, 6, 11}) | Decoded silently (a lone character is flushed as a byte) | Error | Spec 0010 |
+| A13 | Irregular layouts | One-shot decode strips every LF anywhere (heap copy); anything else becomes garbage | Error (§3.5) | Spec 0010 |
+| A13b | Pair value above 8191 | The scalar decoder adds the value to its bit queue as is, so the 14th bit spills into the next group: **wrong output, no error** | Error, invalid value (§3.5) | Spec 0010 (kernels check it, §5) |
+| A14 | Sizes | `encode_size_hint` / `decode_size_hint` are upper bounds | Exact E and D exist (§3.3); APIs may expose them | Spec 0010 (`simd::encoded_len`, slice API) |
+| A15 | Legacy conformance | Encoder and decoder tested against the reference test vectors (`tests/reference_vectors.rs`, sha256 of the C `test.sh` fixtures). Decoding of garbage-laden input vs the reference is not explicitly tested. | §4 | Spec 0009 (done: matrix, invalid-input and property tests, `fuzz_legacy`, CLI byte-for-byte comparison with upstream's CLI) |
 | A16 | Trailing LF on input | Accepted (stripped) | Accepted | — |
 | A17 | Level independence | Verified: identical output at `Scalar`, `Simd128`, `Simd256` for n = 0 … 3000 and W ∈ {0, 16, 32, 48, 64} (x86_64) | §3.4 | Keep as a test |
-| A18 | Spec 0002 API section | `simd::decode` "returns `None` if no `-`", `decode_unchecked` "returns `usize::MAX`", `Encoder::new(level, wrap)`: none of these match the code (Henke fallback; no wrap in the streaming encoder) | Out of scope here (API spec) | To be superseded by an API contract spec |
+| A18 | Spec 0002 API section | `simd::decode` "returns `None` if no `-`", `decode_unchecked` "returns `usize::MAX`", `Encoder::new(level, wrap)`: none of these match the code (Henke fallback; no wrap in the streaming encoder) | Out of scope here (API spec) | Spec 0010 (defines the 0.3.0 API) |
 
-Items marked "New" have no spec yet. Most of them (A9–A13b) are the decoder
-acceptance rules of §3.5 and belong together in one "strict SIMD decoder"
-spec, which should build on spec 0006's streaming decoder.
+Items still marked "New" have no spec yet. The decoder acceptance rules of
+§3.5 (A9–A13b), the in-place layout (A4), width validation (A2), exact
+sizes (A14) and the API (A18) are all covered by spec 0010, the driver-layer
+rewrite (0.3.0).

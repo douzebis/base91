@@ -83,7 +83,7 @@ use-after-free or a double free.
 ## Non-goals
 
 - Zero-copy output. This spec trades speed for obvious correctness; spec
-  0007 restores zero-copy with a slice-based core.
+  0010 restores zero-copy with a slice-based core.
 - Changing the signatures or the contract of the two functions.
 - Miri in CI (needs a nightly toolchain, which the pinned nixpkgs does not
   provide). The test-strategy spec (0009) revisits this.
@@ -127,7 +127,7 @@ pub unsafe fn decode_unchecked(input: &[u8], max_level: SimdLevel, output: *mut 
 - Invalid SIMD input: `decode` "always succeeds" (invalid bytes silently
   corrupt the output). `decode_unchecked` keeps exactly that behavior.
 - Performance cost: one allocation and one copy per call. It is accepted
-  until spec 0007.
+  until spec 0010.
 
 ### 2 — Size-hint audit
 
@@ -171,7 +171,7 @@ the compile-time detection path.
 
 - Rustdoc of both functions: say that the output is identical to
   `simd::encode` / `simd::decode`, that empty input writes nothing, and
-  that they currently allocate (to be removed by spec 0007).
+  that they currently allocate (to be removed by spec 0010, which also deprecates them).
 - `CHANGELOG.md`, new `Security` section under 0.2.3: describe the bug, the
   affected version (0.2.2), the affected functions, and the recommended
   action (upgrade to 0.2.3).

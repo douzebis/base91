@@ -63,8 +63,8 @@ None of this was caught, because the existing tests:
   tests they must pass).
 - Absolute performance targets (GB/s). Those belong to `criterion`
   benchmarks, which are not pass/fail.
-- Tests for APIs that do not exist yet (the slice API of spec 0007, the
-  strict decoder). They join the same matrix when they land.
+- Tests for APIs that do not exist yet (the slice API and the
+  strict decoder, spec 0010). They join the same matrix when they land.
 
 ## Specification
 
@@ -362,7 +362,7 @@ Implementation notes (phase 2):
   `simd_roundtrip_52`, `decode_from_slow_pipe`) come with the §9 CLI suite
   in phase 3.
 - The `strict_decoder_*` tests (spec 0008 annex A9–A13b) are written with
-  the strict-decoder spec: they depend on its error API, which does not
+  spec 0010: they depend on its error API, which does not
   exist yet. Until then, `pending::SimdStrictDecoding` covers them in the
   §4 and §5 tests.
 - §3's decode of the invalid payload lengths and classification after

@@ -99,7 +99,7 @@ headers resurrected the two files.
 - Runtime CPU detection under `no_std` (hand-written `cpuid` / `xgetbv`,
   atomic caching). This was considered and rejected; see *Alternatives*.
 - Allocation-free encode/decode APIs. This spec only makes a build without
-  `alloc` *possible*; the APIs come in spec 0007.
+  `alloc` *possible*; the APIs come in spec 0010 (which supersedes 0007).
 - Fixing the `simd::*_unchecked` memory-safety bug (spec 0005).
 - SVE2 support on aarch64.
 - New Cargo dependencies.
@@ -172,7 +172,7 @@ modules) is gated the same way, with `#[cfg(all(feature = "alloc", …))]`
 on the `mod` declarations. That way nothing is dead code in a build
 without `alloc`. **No `#[allow(dead_code)]`.**
 
-Spec 0007 will make the SIMD and streaming paths available without `alloc`.
+Spec 0010 will make the SIMD and streaming paths available without `alloc`.
 
 ### 3 — `std::` → `core::` for items available in `core`
 
@@ -432,7 +432,7 @@ depend on either of them.
   packaging of spec 0003). `once_cell::sync` needs `critical-section` under
   `no_std`.
 - **Making `no_std` imply `alloc`** (no `alloc` feature). Simpler now, but
-  spec 0007 would then have to add an `alloc` feature later, and that is a
+  spec 0010 would then have to add an `alloc` feature later, and that is a
   breaking change for `default-features = false` users of the `Vec` API.
 - **Moving the Python bindings to a separate crate** (instead of §6). Also
   fixes the `cdylib` problem, but it is a larger restructuring (workspace,

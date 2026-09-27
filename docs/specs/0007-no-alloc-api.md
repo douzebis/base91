@@ -6,7 +6,8 @@ SPDX-License-Identifier: MIT
 
 # 0007 — Allocation-free encode/decode API
 
-**Status:** draft
+**Status:** superseded by spec 0010 (driver-layer rewrite), which folds in
+this spec's content; kept for history
 **App:** base91
 **Implemented in:** —
 

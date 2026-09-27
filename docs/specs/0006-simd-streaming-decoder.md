@@ -222,7 +222,7 @@ can happen anywhere. Affects both formats (the reader auto-detects).
 
 ## Non-goals
 
-- A slice-based or allocation-free decoder (spec 0007 builds on this one).
+- A slice-based or allocation-free decoder (spec 0010 builds on this one).
 - The decoder acceptance rules of spec 0008 §3.5 (errors on invalid
   characters, CR LF, irregular layouts, invalid lengths) and the in-place
   fast path they enable. They change behavior and belong in a separate
@@ -289,7 +289,7 @@ segment loop was considered and rejected for this patch release. With short
 lines (e.g. `wrap = 32`), the per-segment dispatch overhead would slow
 down the one-shot path. The proper fast path (kernels running in place
 over a known, regular layout, with no copy) depends on spec 0008's strict
-acceptance rules, and belongs in the strict-decoder spec.
+acceptance rules, and belongs in spec 0010 (driver rewrite).
 
 To keep the two paths from drifting apart, §6's equivalence tests compare
 the streaming decoder with the one-shot decoder on every case.
@@ -307,7 +307,7 @@ deliberate output change in this patch release. It is compatible: every
 0.2.x decoder ignores a trailing newline (spec 0008 annex, A16).
 
 The fix stays within the current two-pass design. Writing units in place
-comes with spec 0007.
+comes with spec 0010.
 
 Width validation (multiple of 32) is not added to the library here (spec
 0008 annex, A2). The tests below only use valid widths.
@@ -410,7 +410,7 @@ baseline:
   (≤ 2 %) of 0.2.2;
 - streaming SIMD decode: measured and recorded in the CHANGELOG, with no
   target. It was wrong before, so there is no meaningful baseline, and its
-  fast path comes with the strict-decoder spec.
+  fast path comes with spec 0010.
 
 ### 8 — Documentation and release
 
@@ -439,12 +439,9 @@ baseline:
 
 ## Open questions
 
-1. **Should `simd::scalar` stay public?** It is `pub mod scalar`, which
-   exposes `ScalarEncoder` / `ScalarDecoder`, and that is how bug 2 is
-   reachable today. If it only exists for benchmarks and tests, making it
-   `pub(crate)` (or `#[doc(hidden)]`) shrinks the public surface. That
-   would be a breaking change, so it belongs in 0.3.0 (with spec 0007), not
-   in 0.2.3.
+None. (`simd::scalar` stays public in 0.2.3, with bug 2 fixed; spec 0010
+decides to make it `pub(crate)` in 0.3.0, since nothing outside the module
+uses it.)
 
 ## Verification
 
