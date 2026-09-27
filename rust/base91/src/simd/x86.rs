@@ -49,8 +49,9 @@
 
 #![allow(non_snake_case)]
 
+use alloc::vec::Vec;
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+use core::arch::x86_64::*;
 
 const MAGIC91: u16 = 2881;
 const SHIFT91: i32 = 2;
@@ -691,7 +692,7 @@ unsafe fn encode_loop<const IN: usize, const OUT: usize>(
             input.as_ptr().add(offset)
         } else {
             let n = remaining.min(pad.len());
-            std::ptr::copy_nonoverlapping(input.as_ptr().add(offset), pad.as_mut_ptr(), n);
+            core::ptr::copy_nonoverlapping(input.as_ptr().add(offset), pad.as_mut_ptr(), n);
             pad.as_ptr()
         };
         block_fn(src, out_ptr.add(i * OUT));

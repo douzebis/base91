@@ -16,7 +16,10 @@ categories  = ["encoding"]
 
 [lib]
 name = "base91"
-crate-type = ["rlib", "cdylib"]
+# No crate-type: the default rlib only. A cdylib here would be built even
+# when base91-rs is a dependency, and breaks no_std / default-features = false
+# builds downstream (spec 0004 §6). maturin builds the Python extension's
+# cdylib itself (pyproject.toml: bindings = "pyo3").
 
 [[bin]]
 name = "post_build"
@@ -28,10 +31,13 @@ name    = "throughput"
 harness = false
 
 [features]
+# std ⊃ alloc ⊃ core (spec 0004 §1). Without default features the crate is
+# no_std; `alloc` adds the Vec-based API.
 default        = ["std", "io"]
-std            = []
+std            = ["alloc"]
+alloc          = []
 io             = ["std"]
-python         = ["pyo3", "pyo3-stub-gen", "pyo3-stub-gen-derive"]
+python         = ["std", "pyo3", "pyo3-stub-gen", "pyo3-stub-gen-derive"]
 # Enables the C reference benchmarks and c-compat unit tests.
 # Requires gcc, objcopy, and ar on PATH, and src/base91.{c,h} two levels up.
 # Never enabled by default; not part of the published crate.

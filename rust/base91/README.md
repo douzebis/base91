@@ -27,14 +27,13 @@ hop from RAM to NIC to network switch.
 
 ## Features
 
-- **`no_std`** compatible (disable default features)
+- **`no_std`** compatible, with or without `alloc` (see [below](#no_std))
 - **SIMD-accelerated** — optional fixed-width variant with SSE4.1, AVX2, and
   NEON kernels; up to **7.68 GiB/s encode / 8.57 GiB/s decode** on x86_64
 - **Streaming API** — feed data in chunks, no full-buffer requirement
 - **`std::io` adapters** — `EncoderWriter<W>` and `DecoderReader<R>` (feature `io`, on by default)
 - **Unsafe unchecked variants** — `encode_unchecked` / `decode_unchecked` for callers that
   pre-allocate with the provided size hints
-- **C-compatible ABI** — `basE91_*` functions with layout identical to the C reference
 
 ## Performance
 
@@ -136,10 +135,43 @@ assert_eq!(decoded, b"Hello, world!");
 
 ### `no_std`
 
+The crate has three levels, selected with Cargo features
+(`std` ⊃ `alloc` ⊃ core):
+
+| Features | Environment | API |
+|---|---|---|
+| default (`std`, `io`) | hosted | everything, including the `io` adapters |
+| `default-features = false, features = ["alloc"]` | `no_std` with a heap | everything that returns a `Vec` (`encode`, `decode`, `Encoder`, `Decoder`, `simd::*`); no `io` |
+| `default-features = false` | `no_std`, no heap | see below |
+
 ```toml
 [dependencies]
-base91-rs = { version = "0.2", default-features = false }
+base91-rs = { version = "0.2", default-features = false, features = ["alloc"] }
 ```
+
+Without `alloc`, the public API is:
+
+| Item | Why it's available |
+|---|---|
+| `encode_size_hint`, `decode_size_hint` | pure arithmetic |
+| `encode_unchecked`, `decode_unchecked` (Henke, crate root) | write into a caller-provided buffer |
+| `simd::SimdLevel`, `simd::detect()` | no allocation |
+| `simd::encode_size_hint`, `simd::decode_size_hint` | pure arithmetic |
+
+The SIMD and streaming paths still need `alloc`; a later release will make
+them available without it.
+
+**SIMD selection.** With `std`, the SIMD kernel is chosen at run time from
+the CPU's features. Without `std`, it is chosen at compile time from the
+target features, so the SIMD variant uses the scalar kernel unless you
+enable them, e.g. `-C target-cpu=native` or
+`-C target-feature=+ssse3,+sse4.1` (x86_64), `+neon` (aarch64).
+
+**Soft-float targets.** On targets such as `x86_64-unknown-none` or
+`aarch64-unknown-none-softfloat`, the environment (typically a kernel) has
+not enabled the SIMD registers. Do not enable SIMD target features there:
+keep the target's defaults. The compiler then lowers the SIMD kernels to
+scalar code, which is correct but slower than the scalar kernel.
 
 ## License
 

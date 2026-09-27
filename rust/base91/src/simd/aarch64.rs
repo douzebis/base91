@@ -35,8 +35,9 @@
 
 #![allow(non_snake_case)]
 
+use alloc::vec::Vec;
 #[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::*;
+use core::arch::aarch64::*;
 
 const MAGIC91: u16 = 2881;
 const SHIFT91: i32 = 18; // 16 + 2
@@ -331,7 +332,7 @@ pub(crate) unsafe fn encode_neon(input: &[u8], output: &mut Vec<u8>) {
             src
         } else {
             let copy_len = remaining.min(16);
-            std::ptr::copy_nonoverlapping(src, pad_buf.as_mut_ptr(), copy_len);
+            core::ptr::copy_nonoverlapping(src, pad_buf.as_mut_ptr(), copy_len);
             pad_buf.as_ptr()
         };
         encode_block_neon(src_ptr, out_ptr.add(i * 16));

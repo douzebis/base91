@@ -30,16 +30,26 @@
 //! | other               | scalar fixed-width fallback                     |
 //!
 //! The Cargo feature `force-scalar` bypasses SIMD detection (for benchmarking).
+//!
+//! Without the `std` feature (`no_std`), there is no runtime CPU detection:
+//! the kernel is chosen at compile time from the target features the crate
+//! is built with (`-C target-cpu=…` or `-C target-feature=+avx2`, …). On
+//! soft-float targets (`x86_64-unknown-none`,
+//! `aarch64-unknown-none-softfloat`, …) keep the target's defaults: enabling
+//! SIMD target features there makes the kernels slower, not faster, because
+//! the compiler lowers them to scalar code.
 
+#[cfg(feature = "alloc")]
 pub mod scalar;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(feature = "alloc", target_arch = "x86_64"))]
 pub(crate) mod x86;
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(feature = "alloc", target_arch = "aarch64"))]
 pub(crate) mod aarch64;
 
-use std::sync::OnceLock;
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
 
 // ---------------------------------------------------------------------------
 // Public SimdLevel
@@ -80,8 +90,11 @@ enum ArchLevel {
     Scalar,
 }
 
-static ARCH_LEVEL: OnceLock<ArchLevel> = OnceLock::new();
+#[cfg(feature = "std")]
+static ARCH_LEVEL: std::sync::OnceLock<ArchLevel> = std::sync::OnceLock::new();
 
+/// Runtime CPU detection (`std` only).
+#[cfg(feature = "std")]
 fn detect_arch() -> ArchLevel {
     #[cfg(feature = "force-scalar")]
     {
@@ -113,11 +126,50 @@ fn detect_arch() -> ArchLevel {
     ArchLevel::Scalar
 }
 
+#[cfg(feature = "std")]
 fn arch_level() -> ArchLevel {
     *ARCH_LEVEL.get_or_init(detect_arch)
 }
 
+/// Compile-time selection without `std` (spec 0004 §4): the target features
+/// the crate is compiled with decide. The feature sets checked match the
+/// kernels' `#[target_feature(enable = …)]` attributes. `if cfg!(…)` (rather
+/// than `#[cfg]`) keeps every variant constructed whatever the target.
+#[cfg(not(feature = "std"))]
+fn detect_arch_static() -> ArchLevel {
+    if cfg!(feature = "force-scalar") {
+        return ArchLevel::Scalar;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        if cfg!(target_feature = "avx2") {
+            return ArchLevel::Avx2;
+        }
+        if cfg!(all(target_feature = "sse4.1", target_feature = "ssse3")) {
+            return ArchLevel::Sse41;
+        }
+    }
+    // NEON is checked explicitly: aarch64-unknown-none-softfloat disables it.
+    #[cfg(target_arch = "aarch64")]
+    {
+        if cfg!(target_feature = "neon") {
+            return ArchLevel::Neon;
+        }
+    }
+    ArchLevel::Scalar
+}
+
+#[cfg(not(feature = "std"))]
+#[inline(always)]
+fn arch_level() -> ArchLevel {
+    detect_arch_static()
+}
+
 // Resolve the effective kernel to use given a max_level hint.
+//
+// The kernels this returns are safe to call: their target features were
+// detected at runtime (`std`) or are enabled at compile time (`no_std`).
+#[cfg(feature = "alloc")]
 fn effective_level(max_level: SimdLevel) -> ArchLevel {
     match (arch_level(), max_level) {
         // If caller caps at Scalar, always use scalar.
@@ -147,6 +199,12 @@ fn effective_level(max_level: SimdLevel) -> ArchLevel {
 // ---------------------------------------------------------------------------
 
 /// Detect the best [`SimdLevel`] available on the current CPU.
+///
+/// With the `std` feature this is runtime detection (cached). Without it
+/// (`no_std`), the level comes from the target features the crate is compiled
+/// with: build with `-C target-cpu=…` or `-C target-feature=…` to enable the
+/// SIMD kernels. On soft-float targets, keep the target's defaults (see the
+/// module documentation).
 pub fn detect() -> SimdLevel {
     match arch_level() {
         #[cfg(target_arch = "x86_64")]
@@ -187,6 +245,7 @@ pub fn decode_size_hint(encoded_len: usize) -> usize {
 /// `wrap` output characters (`wrap` must be a multiple of 32).
 /// `max_level` caps the SIMD kernel used; [`SimdLevel::default`] uses the best
 /// available.
+#[cfg(feature = "alloc")]
 pub fn encode(input: &[u8], max_level: SimdLevel, wrap: usize) -> Vec<u8> {
     if input.is_empty() {
         return Vec::new();
@@ -202,6 +261,7 @@ pub fn encode(input: &[u8], max_level: SimdLevel, wrap: usize) -> Vec<u8> {
 /// A leading `-` indicates a SIMD fixed-width stream; anything else is decoded
 /// as a Henke stream.  Always succeeds (returns `Some`); invalid bytes in a
 /// SIMD stream silently corrupt output.  `max_level` caps the SIMD kernel used.
+#[cfg(feature = "alloc")]
 pub fn decode(input: &[u8], max_level: SimdLevel) -> Option<Vec<u8>> {
     if input.is_empty() {
         return Some(Vec::new());
@@ -221,6 +281,7 @@ pub fn decode(input: &[u8], max_level: SimdLevel) -> Option<Vec<u8>> {
 /// # Safety
 /// `output` must point to at least `encode_size_hint(input.len(), wrap)`
 /// writable bytes.
+#[cfg(feature = "alloc")]
 pub unsafe fn encode_unchecked(
     input: &[u8],
     max_level: SimdLevel,
@@ -231,7 +292,7 @@ pub unsafe fn encode_unchecked(
     out.push(b'-');
     encode_into(input, max_level, wrap, &mut out);
     let n = out.len();
-    std::mem::forget(out);
+    core::mem::forget(out);
     n
 }
 
@@ -243,12 +304,13 @@ pub unsafe fn encode_unchecked(
 /// # Safety
 /// `output` must point to at least `decode_size_hint(input.len())`
 /// writable bytes.
+#[cfg(feature = "alloc")]
 pub unsafe fn decode_unchecked(input: &[u8], max_level: SimdLevel, output: *mut u8) -> usize {
     if let Some(payload) = input.strip_prefix(b"-") {
         let mut out = Vec::from_raw_parts(output, 0, decode_size_hint(input.len()));
         decode_into(payload, max_level, &mut out);
         let n = out.len();
-        std::mem::forget(out);
+        core::mem::forget(out);
         n
     } else {
         crate::decode_unchecked(input, output)
@@ -259,6 +321,7 @@ pub unsafe fn decode_unchecked(input: &[u8], max_level: SimdLevel, output: *mut 
 // Internal dispatch helpers
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "alloc")]
 fn encode_into(input: &[u8], max_level: SimdLevel, wrap: usize, output: &mut Vec<u8>) {
     match effective_level(max_level) {
         #[cfg(target_arch = "x86_64")]
@@ -303,6 +366,7 @@ fn encode_into(input: &[u8], max_level: SimdLevel, wrap: usize, output: &mut Vec
     }
 }
 
+#[cfg(feature = "alloc")]
 fn decode_into(input: &[u8], max_level: SimdLevel, output: &mut Vec<u8>) -> bool {
     // Strip any \n bytes (inserted by --wrap during encoding) before dispatching
     // to SIMD kernels, which do not tolerate non-alphabet bytes in their input.
@@ -366,6 +430,7 @@ fn decode_into(input: &[u8], max_level: SimdLevel, output: &mut Vec<u8>) -> bool
 /// Output layout: `-\n` then payload split into lines of exactly `wrap` chars
 /// (last line may be shorter).  Every payload line is the same width, making
 /// the output easy to inspect and the decoder's job uniform.
+#[cfg(feature = "alloc")]
 fn insert_wrap_newlines(output: &mut Vec<u8>, wrap: usize) {
     // payload starts at index 1 (after '-')
     let payload_len = output.len() - 1;
@@ -373,7 +438,7 @@ fn insert_wrap_newlines(output: &mut Vec<u8>, wrap: usize) {
     let newline_count = 1 + payload_len / wrap;
     // Grow the buffer to fit the newlines, then shift right-to-left.
     output.resize(output.len() + newline_count, 0);
-    let buf = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr(), output.len()) };
+    let buf = unsafe { core::slice::from_raw_parts_mut(output.as_mut_ptr(), output.len()) };
     let total = buf.len();
     // dst: write cursor (from the end); src: read cursor into original payload.
     let mut dst = total - 1;
@@ -410,12 +475,14 @@ fn insert_wrap_newlines(output: &mut Vec<u8>, wrap: usize) {
 ///
 /// Feed input with [`Encoder::encode`]; flush with [`Encoder::finish`].
 /// The `-` prefix is written on the first `encode` call.
+#[cfg(feature = "alloc")]
 pub struct Encoder {
     scalar: scalar::ScalarEncoder,
     max_level: SimdLevel,
     prefix_written: bool,
 }
 
+#[cfg(feature = "alloc")]
 impl Encoder {
     pub fn new(max_level: SimdLevel) -> Self {
         Self {
@@ -486,6 +553,7 @@ impl Encoder {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl Default for Encoder {
     fn default() -> Self {
         Self::new(SimdLevel::default())
@@ -497,6 +565,7 @@ impl Default for Encoder {
 // ---------------------------------------------------------------------------
 
 /// Stateful SIMD fixed-width decoder. Auto-detects Henke vs SIMD from first byte.
+#[cfg(feature = "alloc")]
 pub struct Decoder {
     scalar: scalar::ScalarDecoder,
     max_level: SimdLevel,
@@ -505,6 +574,7 @@ pub struct Decoder {
     henke: Option<crate::Decoder>,
 }
 
+#[cfg(feature = "alloc")]
 impl Decoder {
     pub fn new(max_level: SimdLevel) -> Self {
         Self {
@@ -551,6 +621,7 @@ impl Decoder {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl Default for Decoder {
     fn default() -> Self {
         Self::new(SimdLevel::default())
@@ -561,7 +632,7 @@ impl Default for Decoder {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 mod tests {
     use super::*;
 

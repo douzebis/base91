@@ -10,6 +10,8 @@
 //! Wire format: one leading `-` byte, then fixed-width 13-bit groups encoded
 //! two characters each using the SIMD alphabet (0x23–0x26, 0x28–0x7E).
 
+use alloc::vec::Vec;
+
 // ---------------------------------------------------------------------------
 // Alphabet helpers
 // ---------------------------------------------------------------------------
@@ -305,7 +307,7 @@ impl ScalarDecoder {
         while i + 16 <= input.len() {
             // SAFETY: i+16 <= input.len() guarantees 16 readable bytes.
             let d: [u32; 16] =
-                std::array::from_fn(|k| idx!(unsafe { *input.get_unchecked(i + k) }));
+                core::array::from_fn(|k| idx!(unsafe { *input.get_unchecked(i + k) }));
             i += 16;
 
             if nbits == 0 {

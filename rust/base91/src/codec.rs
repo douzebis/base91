@@ -9,6 +9,9 @@
 //! reference (http://base91.sourceforge.net/), ensuring byte-for-byte
 //! interoperability.
 
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+
 /// The 91-character encoding alphabet, in canonical order.
 ///
 /// Index 0–90 maps to the printable ASCII character used to represent that
@@ -60,11 +63,13 @@ pub(crate) const DECTAB: &[u8; 256] = &{
 /// enc.encode(b"Hello, world!", &mut out);
 /// enc.finish(&mut out);
 /// ```
+#[cfg(feature = "alloc")]
 pub struct Encoder {
     queue: u32,
     nbits: u32,
 }
 
+#[cfg(feature = "alloc")]
 impl Encoder {
     /// Create a new encoder with empty state.
     #[inline]
@@ -141,6 +146,7 @@ impl Encoder {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl Default for Encoder {
     fn default() -> Self {
         Self::new()
@@ -165,6 +171,7 @@ impl Default for Encoder {
 /// dec.decode(b"PM{(8&~AA", &mut out);
 /// dec.finish(&mut out);
 /// ```
+#[cfg(feature = "alloc")]
 pub struct Decoder {
     queue: u32,
     nbits: u32,
@@ -172,6 +179,7 @@ pub struct Decoder {
     val: u32,
 }
 
+#[cfg(feature = "alloc")]
 impl Decoder {
     /// Create a new decoder with empty state.
     #[inline]
@@ -250,6 +258,7 @@ impl Decoder {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl Default for Decoder {
     fn default() -> Self {
         Self::new()
@@ -394,7 +403,7 @@ pub(crate) unsafe fn decode_unchecked(input: &[u8], output: *mut u8) -> usize {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 mod tests {
     use super::*;
 

@@ -215,6 +215,46 @@ let
     '';
   });
 
+  # no_std builds (spec 0004 §7): the library without std, with and without
+  # alloc, for the host (the crate is #![no_std] there), for wasm32v1-none
+  # (a target with no std at all, whose core/alloc nixpkgs' rustc ships),
+  # and with the AVX2 compile-time branch; clippy and the library tests too
+  # (without alloc they compile but run no test).
+  rustNoStd = crane.mkCargoDerivation (rustCommon // {
+    pname             = "base91-nostd";
+    cargoArtifacts    = rustDeps;
+    nativeBuildInputs = rustCommon.nativeBuildInputs ++ [ pkgs.clippy ];
+    buildPhaseCargoCommand = ''
+      P="--locked -p base91-rs --lib --no-default-features"
+      for feat in "" "--features alloc"; do
+        cargoWithProfile build  $P $feat
+        cargoWithProfile build  $P $feat --target wasm32v1-none
+        RUSTFLAGS="-C target-feature=+avx2" cargoWithProfile build $P $feat \
+          --target-dir target/avx2
+        cargoWithProfile clippy $P $feat -- --deny warnings
+        cargoWithProfile test   $P $feat
+      done
+    '';
+    doCheck = false;
+    installPhaseCommand = "mkdir -p $out";
+  });
+
+  # The same for aarch64, cross-compiled (spec 0004 §7): catches
+  # aarch64-specific no_std breakage (NEON intrinsics) the other builds
+  # cannot see.
+  rustNoStdAarch64 = craneAarch64.mkCargoDerivation (rustCommon // {
+    pname             = "base91-nostd-aarch64";
+    nativeBuildInputs = [ ];
+    cargoArtifacts    = null;
+    buildPhaseCargoCommand = ''
+      for feat in "" "--features alloc"; do
+        cargoWithProfile build --locked -p base91-rs --lib --no-default-features $feat
+      done
+    '';
+    doCheck = false;
+    installPhaseCommand = "mkdir -p $out";
+  });
+
   # The full differential matrix and property runs (spec 0009 §2, §11).
   rustTestsFull = crane.cargoTest (rustCommon // testEnv // {
     pname              = "base91-tests-full";
@@ -389,6 +429,11 @@ let
 
     maturinBuildFlags = [ "--features" "python" ];
 
+    # Importing the package loads the compiled extension: fails if the wheel
+    # has none, which maturin produces silently when it misdetects the
+    # bindings (spec 0004 §6, §7).
+    pythonImportsCheck = [ "pybase91" ];
+
     env.PYO3_PYTHON = pythonExecutable;
 
     meta = with pkgs.lib; {
@@ -484,5 +529,7 @@ in
   rust-fuzz     = rustFuzz;
   rust-perf     = rustPerf;
   rust-coverage = rustCoverage;
+  rust-nostd    = rustNoStd;
+  rust-nostd-aarch64 = rustNoStdAarch64;
   go-tests      = goTests;
 }

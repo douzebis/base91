@@ -16,7 +16,7 @@ use base91_testkit::oracle;
 use base91_testkit::pending::{is_pending, Deviation};
 use base91_testkit::reader::PieceReader;
 use base91_testkit::rng::{full_matrix, Rng};
-use std::io::{Read, Write};
+use std::io::Read;
 
 const LEVELS: [SimdLevel; 3] = [SimdLevel::Scalar, SimdLevel::Simd128, SimdLevel::Simd256];
 const WIDTHS: [usize; 4] = [0, 32, 64, 96];
@@ -346,6 +346,7 @@ fn simd_unchecked_matches_oracle() {
 mod legacy {
     use super::*;
     use base91_testkit::reference;
+    use std::io::Write;
 
     #[test]
     fn one_shot_matches_reference() {

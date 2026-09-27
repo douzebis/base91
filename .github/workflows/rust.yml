@@ -43,6 +43,14 @@ jobs:
       - name: cargo test
         run: nix-build default.nix -A rust-tests --argstr testSeed "${{ github.sha }}"
 
+      # no_std builds (spec 0004 §7): host, wasm32v1-none, AVX2 branch, and
+      # aarch64 cross-compiled.
+      - name: cargo no_std
+        run: nix-build default.nix -A rust-nostd
+
+      - name: cargo no_std (aarch64)
+        run: nix-build default.nix -A rust-nostd-aarch64
+
       # aarch64 (NEON kernels) under qemu user-mode (spec 0009 §8). The
       # first run builds nixpkgs' cross rustc (about 8 minutes); Cachix keeps
       # it for later runs.

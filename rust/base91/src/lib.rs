@@ -51,7 +51,15 @@
 //! assert_eq!(decoded, b"Hello, world!");
 //! ```
 
-#![cfg_attr(not(feature = "std"), no_std)]
+// no_std unless the `std` feature is on (spec 0004 §1). Test builds keep std
+// for the test harness; the `std` *feature* stays off there, so they exercise
+// the no_std code paths.
+#![cfg_attr(not(any(feature = "std", test)), no_std)]
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
 
 mod codec;
 #[cfg(feature = "io")]
@@ -60,6 +68,7 @@ pub mod io;
 pub mod python;
 pub mod simd;
 
+#[cfg(feature = "alloc")]
 pub use codec::{Decoder, Encoder};
 
 /// Return stub generation metadata for the `pybase91` Python extension.
@@ -106,6 +115,7 @@ pub fn decode_size_hint(input_len: usize) -> usize {
 /// The output buffer is pre-reserved to the exact upper bound, so no
 /// reallocation occurs and the Vec capacity check is eliminated from the
 /// hot loop by the branch predictor.
+#[cfg(feature = "alloc")]
 pub fn encode(input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(encode_size_hint(input.len()));
     let mut enc = Encoder::new();
@@ -120,6 +130,7 @@ pub fn encode(input: &[u8]) -> Vec<u8> {
 /// The output buffer is pre-reserved to the exact upper bound, so no
 /// reallocation occurs and the Vec capacity check is eliminated from the
 /// hot loop by the branch predictor.
+#[cfg(feature = "alloc")]
 pub fn decode(input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(decode_size_hint(input.len()));
     let mut dec = Decoder::new();
@@ -173,7 +184,7 @@ pub unsafe fn decode_unchecked(input: &[u8], output: *mut u8) -> usize {
     codec::decode_unchecked(input, output)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 mod tests {
     use super::*;
 

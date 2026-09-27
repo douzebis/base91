@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0004 — Make `base91-rs` actually build under `no_std`
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** —
+**Implemented in:** 2026-09-27
 
 ## Problem
 

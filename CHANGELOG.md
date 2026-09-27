@@ -15,6 +15,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `base91-rs` now builds under `no_std` (issue #1): `std` items used
+  without a feature gate were replaced by their `core` / `alloc`
+  equivalents or gated, and SIMD detection falls back to compile-time
+  target features without `std`.
+- `default-features = false` no longer fails on hosted targets: the crate
+  no longer declares a `cdylib` crate-type (maturin builds the Python
+  extension's cdylib itself).
+
+### Added
+
+- `alloc` feature (implied by `std`): the `Vec`-based API under `no_std`.
+  Without it, the crate exposes the size hints, the Henke `*_unchecked`
+  functions and `simd::detect()`.
+
+### Removed
+
+- The unused `c_api.rs` and `cbindgen.toml` leftovers.
+
 ---
 
 ## [0.2.2] - 2026-03-30

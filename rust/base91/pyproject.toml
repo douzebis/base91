@@ -14,5 +14,9 @@ license         = { text = "MIT" }
 requires-python = ">=3.11"
 
 [tool.maturin]
+# Required since Cargo.toml declares no cdylib (spec 0004 §6): without it,
+# maturin sees the post_build binary and silently builds a "bin" wheel with
+# no extension module.
+bindings      = "pyo3"
 features      = ["python"]
 module-name   = "pybase91.pybase91"

@@ -213,12 +213,15 @@ impl<R: Read> Read for DecoderReader<R> { … }
 | Feature | Default | Purpose |
 |---|---|---|
 | `io` | yes | `EncoderWriter` / `DecoderReader` (requires `std`) |
-| `std` | yes | Pulls in `std`; disable for `no_std` environments |
+| `std` | yes | Pulls in `std` (implies `alloc`); disable for `no_std` environments |
+| `alloc` | via `std` | The `Vec`-based API (`encode`, `decode`, `Encoder`, `Decoder`, `simd::*`) |
 | `python` | no | PyO3 Python module |
 | `c-compat-tests` | no | Cross-checks against compiled C reference |
 
 With `default-features = false` the crate compiles under `no_std`
-(algorithm core only, no I/O adapters).
+(size hints, the Henke `*_unchecked` functions and `simd::detect()`
+only); adding `features = ["alloc"]` restores the `Vec`-based API.
+See spec 0004.
 
 #### 3.5 Performance targets
 
@@ -302,6 +305,10 @@ if nbits >= 8 {
 
 ### 4. C library (`libbase91`)
 
+> **Dropped.** The Rust C API (`c_api.rs`, `cbindgen`) was replaced by a
+> native build of the C reference in `ba47d9c`; the leftover files were
+> deleted by spec 0004. This section is kept for history.
+
 #### 4.1 ABI compatibility
 
 The C library is a **drop-in replacement** for Joachim Henke's
@@ -335,9 +342,10 @@ derivation installs it to `$out/include/base91.h` alongside
 ### 5. Python bindings (`pybase91` / PyO3)
 
 The Python module is compiled from `base91/src/python.rs` when the
-`python` feature is enabled.  It is built as a separate cdylib target
-named `pybase91` (to avoid colliding with the `base91` Rust crate name
-on import).
+`python` feature is enabled.  It is built as a cdylib named `pybase91`
+(to avoid colliding with the `base91` Rust crate name on import).  The
+cdylib is produced by maturin (`bindings = "pyo3"` in `pyproject.toml`),
+not declared in `Cargo.toml` (spec 0004 §6).
 
 #### 5.1 Python API
 
