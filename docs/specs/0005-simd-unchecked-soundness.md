@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0005 — Fix memory corruption in `simd::encode_unchecked` / `decode_unchecked`
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** —
+**Implemented in:** 2026-09-27
 
 ## Problem
 
@@ -193,6 +193,11 @@ the compile-time detection path.
    practice for a soundness bug in a published crate, but with 201 total
    downloads you may prefer only a GitHub advisory plus the CHANGELOG
    entry. Your call.
+
+   *Decided (2026-09-27):* no disclosure of any kind until every pending
+   spec is implemented and tested. The scope (yank, GitHub advisory,
+   RustSec) is decided then. Until that point nothing that describes the
+   bug is pushed to the public repository.
 
 ## Verification
 

@@ -234,6 +234,9 @@ let
         cargoWithProfile clippy $P $feat -- --deny warnings
         cargoWithProfile test   $P $feat
       done
+      # The unchecked API under compile-time detection (spec 0005 §3).
+      cargoWithProfile test --locked -p base91-rs --no-default-features \
+        --features alloc --test unchecked
     '';
     doCheck = false;
     installPhaseCommand = "mkdir -p $out";

@@ -278,6 +278,11 @@ pub fn decode(input: &[u8], max_level: SimdLevel) -> Option<Vec<u8>> {
 /// Encode `input` into a caller-provided buffer without bounds checking.
 /// Returns the number of bytes written (including the `-` prefix).
 ///
+/// Writes exactly what [`encode`] returns for the same arguments; empty
+/// input writes nothing and returns 0. It currently encodes into a
+/// temporary `Vec` and copies the result (one allocation per call); spec
+/// 0010 replaces this function with a slice-based API.
+///
 /// # Safety
 /// `output` must point to at least `encode_size_hint(input.len(), wrap)`
 /// writable bytes.
@@ -288,12 +293,13 @@ pub unsafe fn encode_unchecked(
     wrap: usize,
     output: *mut u8,
 ) -> usize {
-    let mut out = Vec::from_raw_parts(output, 0, encode_size_hint(input.len(), wrap));
-    out.push(b'-');
-    encode_into(input, max_level, wrap, &mut out);
-    let n = out.len();
-    core::mem::forget(out);
-    n
+    let encoded = encode(input, max_level, wrap);
+    debug_assert!(encoded.len() <= encode_size_hint(input.len(), wrap));
+    // SAFETY: the caller guarantees `output` has at least
+    // `encode_size_hint(input.len(), wrap)` writable bytes, and the size
+    // hint is an upper bound on `encode`'s output (tests/unchecked.rs).
+    core::ptr::copy_nonoverlapping(encoded.as_ptr(), output, encoded.len());
+    encoded.len()
 }
 
 /// Decode into a caller-provided buffer without bounds checking.
@@ -301,20 +307,21 @@ pub unsafe fn encode_unchecked(
 /// Auto-detects format: a leading `-` selects the SIMD path; otherwise falls
 /// back to Henke.  Returns bytes written.
 ///
+/// Writes exactly what [`decode`] returns for the same arguments; empty
+/// input writes nothing and returns 0. It currently decodes into a
+/// temporary `Vec` and copies the result (one allocation per call); spec
+/// 0010 replaces this function with a slice-based API.
+///
 /// # Safety
 /// `output` must point to at least `decode_size_hint(input.len())`
 /// writable bytes.
 #[cfg(feature = "alloc")]
 pub unsafe fn decode_unchecked(input: &[u8], max_level: SimdLevel, output: *mut u8) -> usize {
-    if let Some(payload) = input.strip_prefix(b"-") {
-        let mut out = Vec::from_raw_parts(output, 0, decode_size_hint(input.len()));
-        decode_into(payload, max_level, &mut out);
-        let n = out.len();
-        core::mem::forget(out);
-        n
-    } else {
-        crate::decode_unchecked(input, output)
-    }
+    let decoded = decode(input, max_level).unwrap_or_default();
+    debug_assert!(decoded.len() <= decode_size_hint(input.len()));
+    // SAFETY: as in `encode_unchecked`, with `decode_size_hint`.
+    core::ptr::copy_nonoverlapping(decoded.as_ptr(), output, decoded.len());
+    decoded.len()
 }
 
 // ---------------------------------------------------------------------------

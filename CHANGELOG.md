@@ -15,7 +15,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- `simd::encode_unchecked` and `simd::decode_unchecked` (`base91-rs`
+  0.2.2 only) caused undefined behavior even when the caller honored the
+  documented buffer size: they wrapped the caller's buffer in a `Vec`,
+  which could reallocate it. Observed effects: double free (encode, inputs
+  of 26 bytes or more on SSE4.1/AVX2), wrong output (decode, every SIMD
+  level). They now encode or decode into a temporary `Vec` and copy the
+  result. Only direct Rust callers of these two functions were affected;
+  the CLI, `pybase91` and the `io` adapters never called them. Upgrade to
+  0.2.3.
+
 ### Fixed
+
+- `simd::encode_unchecked` on empty input now writes nothing and returns
+  0, like `simd::encode` (it used to write `-`).
 
 - `base91-rs` now builds under `no_std` (issue #1): `std` items used
   without a feature gate were replaced by their `core` / `alloc`

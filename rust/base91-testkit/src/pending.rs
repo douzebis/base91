@@ -42,7 +42,6 @@ pub enum Deviation {
 
 /// Deviations not fixed yet.
 pub const PENDING: &[Deviation] = &[
-    Deviation::SimdUnchecked,
     Deviation::SimdStreamingDecoder,
     Deviation::SimdWrappedEncoding,
     Deviation::SimdStreamingEncoderEmpty,

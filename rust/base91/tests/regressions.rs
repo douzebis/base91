@@ -31,7 +31,6 @@ fn random(n: usize) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "fixed by spec 0005 (on 0.2.2: double free, aborts the process)"]
 fn unchecked_simd_encode_len_26_27_52() {
     for n in [26, 27, 52] {
         let x = random(n);
@@ -50,7 +49,6 @@ fn unchecked_simd_encode_len_26_27_52() {
 }
 
 #[test]
-#[ignore = "fixed by spec 0005 (on 0.2.2: wrong output, caller buffer reallocated)"]
 fn unchecked_simd_decode_len_32_100() {
     for n in [32, 100] {
         let x = random(n);
@@ -62,6 +60,17 @@ fn unchecked_simd_decode_len_32_100() {
             out.check();
             assert_eq!(out.written(written), &x[..], "n={n}, {level:?}");
         }
+    }
+}
+
+#[test]
+fn unchecked_simd_encode_empty() {
+    for level in LEVELS {
+        let mut out = Guarded::new(simd::encode_size_hint(0, 0));
+        // SAFETY: as above.
+        let written = unsafe { simd::encode_unchecked(&[], level, 0, out.as_mut_ptr()) };
+        out.check();
+        assert_eq!(out.written(written), b"", "{level:?}");
     }
 }
 

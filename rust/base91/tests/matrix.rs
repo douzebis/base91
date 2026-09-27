@@ -313,11 +313,12 @@ fn io_reader_on_simd_streams() {
 #[test]
 fn simd_unchecked_matches_oracle() {
     let mut skipped = Skipped::new("simd_unchecked", Deviation::SimdUnchecked);
+    let mut skipped_wrap = Skipped::new("simd_unchecked", Deviation::SimdWrappedEncoding);
     for (name, x) in inputs("simd_unchecked") {
         for width in WIDTHS {
             // Spec 0005: calling these corrupts memory; never call them
             // while pending.
-            if skipped.skip() {
+            if skipped.skip() || (width > 0 && skipped_wrap.skip()) {
                 continue;
             }
             let expected = oracle::encode(&x, width);
