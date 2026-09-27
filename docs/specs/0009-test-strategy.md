@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0009 — Test strategy: oracle, differential, property, fuzzing, cross-arch, performance
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** —
+**Implemented in:** 2026-09-27
 
 ## Problem
 
@@ -330,13 +330,37 @@ All attributes in `default.nix`, built from the pinned nixpkgs:
 | `rust-tests-full` | full §2 matrix | yes (scheduled or on `main`) |
 | `rust-nostd`, `rust-nostd-aarch64` | spec 0004 §7 | yes |
 | `rust-perf` | §10 | no, until calibrated; then yes, in its own job |
-| `rust-coverage` | line coverage report of `rust/base91/src` (`cargo-llvm-cov`) | no; the threshold is set after the first report |
+| `rust-coverage` | line coverage report of `rust/base91/src` (`cargo-llvm-cov`), fails below 90 % of lines | no (manual); re-baseline after spec 0010 |
 | `rust-fuzz` | §6 long fuzzing runs, time budget as an argument | no (manual / scheduled) |
 
 All tools these attributes need are in the pinned nixpkgs (verified; see
 *Decisions recorded*). `nix-shell` (via `default.nix`'s dev shell) gets
 `cargo-llvm-cov`, `cargo-fuzz` and `qemu-user` added, so the same commands
 run locally.
+
+Implementation notes (phase 5):
+
+- **Coverage (§11):** `rust-coverage` runs the whole workspace suite under
+  `cargo-llvm-cov`, with the LLVM tools of `rustc` itself (`rustc.llvm`,
+  so they always match), and reports on `rust/base91/src` only. First
+  report, 2026-09-27: **94.4 % of lines** (`simd/x86.rs` 100 %,
+  `simd/mod.rs` 88.4 % the lowest; `simd/aarch64.rs` is not compiled on
+  x86_64 and is exercised by `rust-tests-aarch64` instead). The 70
+  uncovered lines are:
+  - code the pending list keeps tests away from (`simd::*_unchecked`, the
+    streaming carry paths): covered once specs 0005 / 0006 switch their
+    tests on;
+  - CPU-dependent dispatch (SSE4.1-only and scalar-only fallbacks,
+    unreachable on an AVX2 machine);
+  - four `Default` impls, `EncoderWriter::flush`,
+    `DecoderReader::into_inner`;
+  - assertion-message arguments.
+
+  Threshold: fail below 90 %. Re-baseline after spec 0010, which rewrites
+  most of `simd/mod.rs`.
+- **Status:** all five phases are implemented. What stays gated behind the
+  pending list, and the `strict_decoder_*` tests assigned to spec 0010, are
+  by design (see the phase 2 notes and §12).
 
 ### 12 — Regression tests for known bugs
 

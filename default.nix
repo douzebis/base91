@@ -183,6 +183,38 @@ let
     cargoTestExtraArgs = "-p base91-rs --test perf_sanity -- --ignored --nocapture";
   });
 
+  # Line coverage of the library sources (rust/base91/src) by the whole
+  # workspace test suite (spec 0009 §11), with cargo-llvm-cov. Not part of
+  # the blocking CI. Fails below 90 % of lines: the first report (2026-09-27)
+  # measured 94.3 %, the gap being mostly code the pending list keeps tests
+  # away from, CPU-dependent dispatch, trivial Default impls and assertion
+  # messages. Re-baseline after spec 0010, which rewrites the driver layer.
+  # $out holds the summary and an HTML report.
+  #
+  # The LLVM tools must match rustc's LLVM, hence rustc.llvm.
+  rustCoverage = crane.mkCargoDerivation (rustCommon // {
+    pname             = "base91-coverage";
+    cargoArtifacts    = null;
+    nativeBuildInputs = rustCommon.nativeBuildInputs ++ [ pkgs.cargo-llvm-cov ];
+    LLVM_COV          = "${pkgs.rustc.llvm}/bin/llvm-cov";
+    LLVM_PROFDATA     = "${pkgs.rustc.llvm}/bin/llvm-profdata";
+    buildPhaseCargoCommand = ''
+      ignore='(base91-testkit|/fuzz/|base91-cli|/tests/|/benches/|rustc-)'
+      cargo llvm-cov --workspace ${referenceTestsFeatureAll} \
+        --ignore-filename-regex "$ignore" --summary-only --show-missing-lines \
+        --fail-under-lines 90 2>&1 | tee coverage-summary.txt
+      test "''${PIPESTATUS[0]}" -eq 0
+      cargo llvm-cov report --ignore-filename-regex "$ignore" \
+        --html --output-dir coverage-html
+    '';
+    doCheck = false;
+    installPhaseCommand = ''
+      mkdir -p $out
+      cp coverage-summary.txt $out/
+      cp -r coverage-html $out/html
+    '';
+  });
+
   # The full differential matrix and property runs (spec 0009 §2, §11).
   rustTestsFull = crane.cargoTest (rustCommon // testEnv // {
     pname              = "base91-tests-full";
@@ -401,9 +433,12 @@ let
       gh
       # Nix tooling
       nix-update
-      # Test tooling (spec 0009): libFuzzer driver, aarch64 user-mode emulation
+      # Test tooling (spec 0009): libFuzzer driver, aarch64 user-mode emulation,
+      # coverage (with LLVM tools matching rustc's LLVM)
       cargo-fuzz
       qemu-user
+      cargo-llvm-cov
+      rustc.llvm
       # Man page viewer
       mandoc
       # Profiling — samply works on Linux (perf_event_open) and macOS (ktrace)
@@ -448,5 +483,6 @@ in
   rust-tests-aarch64 = rustTestsAarch64;
   rust-fuzz     = rustFuzz;
   rust-perf     = rustPerf;
+  rust-coverage = rustCoverage;
   go-tests      = goTests;
 }
