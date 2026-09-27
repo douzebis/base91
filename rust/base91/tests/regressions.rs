@@ -79,7 +79,6 @@ fn unchecked_simd_encode_empty() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "fixed by spec 0006, bug 1 (on 0.2.2: wrong output)"]
 fn simd_decoder_chunked_20k() {
     let x = random(20_000);
     let stream = oracle::encode(&x, 0);
@@ -93,7 +92,6 @@ fn simd_decoder_chunked_20k() {
 }
 
 #[test]
-#[ignore = "fixed by spec 0006, bug 1 (on 0.2.2: wrong output)"]
 fn io_reader_simd_20k() {
     let x = random(20_000);
     let stream = oracle::encode(&x, 64);
@@ -105,7 +103,6 @@ fn io_reader_simd_20k() {
 }
 
 #[test]
-#[ignore = "fixed by spec 0006, bug 2 (on 0.2.2: heap overflow, aborts the process)"]
 fn scalar_decoder_chunk_size_1() {
     let x = random(20_000);
     let stream = oracle::encode(&x, 0);
@@ -119,7 +116,6 @@ fn scalar_decoder_chunk_size_1() {
 }
 
 #[test]
-#[ignore = "fixed by spec 0006, bug 3 (on 0.2.2: corrupt output)"]
 fn simd_wrap_payload_fills_last_line() {
     // P(26) = 32 = W; P(52) = 64 = W (the CLI default width).
     for (n, width) in [(26, 32), (52, 64)] {
@@ -136,7 +132,6 @@ fn simd_wrap_payload_fills_last_line() {
 }
 
 #[test]
-#[ignore = "fixed by spec 0006, bug 4 (on 0.2.2: `-` instead of empty)"]
 fn simd_streaming_encoder_empty() {
     let mut encoder = simd::Encoder::new(SimdLevel::default());
     let mut got = Vec::new();
@@ -146,7 +141,6 @@ fn simd_streaming_encoder_empty() {
 }
 
 #[test]
-#[ignore = "fixed by spec 0006, bug 5 (on 0.2.2: panics)"]
 fn legacy_decoder_chunk_size_1() {
     // The input that crashes pybase91.Decoder.update() fed byte by byte.
     let x: Vec<u8> = (0..=255u8).cycle().take(256 * 40).collect();
@@ -161,7 +155,6 @@ fn legacy_decoder_chunk_size_1() {
 }
 
 #[test]
-#[ignore = "fixed by spec 0006, bug 6 (on 0.2.2: truncated output)"]
 fn io_reader_lone_newline_read() {
     // The pipe of bug 6: the encoding of "hello, world" arrives in three
     // reads, the middle one a lone newline.
@@ -176,7 +169,6 @@ fn io_reader_lone_newline_read() {
 }
 
 #[test]
-#[ignore = "fixed by spec 0006, bug 6 (on 0.2.2: truncated output)"]
 fn io_reader_one_byte_reads() {
     for x in [random(1), random(1000)] {
         let encoded = base91::encode(&x);

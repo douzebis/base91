@@ -198,8 +198,9 @@ impl Decoder {
     #[inline]
     pub fn decode(&mut self, input: &[u8], output: &mut Vec<u8>) -> usize {
         // Same spare_capacity_mut strategy as Encoder::encode — see that
-        // method for the rationale.
-        output.reserve(crate::decode_size_hint(input.len()));
+        // method for the rationale. `+ 1`: a character pending from the
+        // previous call can complete one more pair (spec 0006 §5b).
+        output.reserve(crate::decode_size_hint(input.len() + 1));
         let spare = output.spare_capacity_mut();
 
         let mut queue = self.queue;

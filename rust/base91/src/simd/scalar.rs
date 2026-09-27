@@ -215,12 +215,21 @@ impl ScalarDecoder {
         }
     }
 
+    /// True when no character is pending and no bits are queued, i.e. at a
+    /// 16-character block boundary (8 pairs of 13 bits = 13 bytes).
+    #[inline]
+    pub fn is_aligned(&self) -> bool {
+        self.first == u32::MAX && self.nbits == 0
+    }
+
     /// Decode `input` SIMD-alphabet characters, appending bytes to `output`.
     ///
     /// Processes 16 alphabet characters at a time (8 pairs → up to 13 bytes).
     /// A single `\n` after each 16-char block is silently skipped (--wrap).
     pub fn decode(&mut self, input: &[u8], output: &mut Vec<u8>) {
-        output.reserve(input.len());
+        // k characters plus a pending one complete at most ⌊(k+1)/2⌋ pairs,
+        // of at most 2 bytes each: k + 1 bytes (spec 0006 §1).
+        output.reserve(input.len() + 1);
 
         let mut queue = self.queue;
         let mut nbits = self.nbits;
@@ -238,11 +247,13 @@ impl ScalarDecoder {
                 let val = $d0 + $d1 * 91;
                 queue |= val << nbits;
                 nbits += 13;
+                debug_assert!(n < spare.len());
                 unsafe { spare.get_unchecked_mut(n).write(queue as u8) };
                 n += 1;
                 queue >>= 8;
                 nbits -= 8;
                 if nbits >= 8 {
+                    debug_assert!(n < spare.len());
                     unsafe { spare.get_unchecked_mut(n).write(queue as u8) };
                     n += 1;
                     queue >>= 8;
@@ -282,6 +293,7 @@ impl ScalarDecoder {
                 let val = $d0 + $d1 * 91;
                 queue |= val << nbits;
                 nbits += 13;
+                debug_assert!(n < spare.len());
                 unsafe { spare.get_unchecked_mut(n).write(queue as u8) };
                 n += 1;
                 queue >>= 8;
@@ -293,10 +305,12 @@ impl ScalarDecoder {
                 let val = $d0 + $d1 * 91;
                 queue |= val << nbits;
                 nbits += 13;
+                debug_assert!(n < spare.len());
                 unsafe { spare.get_unchecked_mut(n).write(queue as u8) };
                 n += 1;
                 queue >>= 8;
                 nbits -= 8;
+                debug_assert!(n < spare.len());
                 unsafe { spare.get_unchecked_mut(n).write(queue as u8) };
                 n += 1;
                 queue >>= 8;
@@ -459,6 +473,59 @@ mod tests {
             enc.finish(&mut out);
             assert_eq!(out, reference, "chunk_size={chunk_size}");
         }
+    }
+
+    /// Spec 0006 §6 (bug 2): any chunking gives the one-shot result, and the
+    /// `debug_assert!`s on the unchecked writes catch any overflow of the
+    /// reservation.
+    #[test]
+    fn decoder_chunk_independence() {
+        let mut rng = base91_testkit::rng::Rng::for_test("scalar_decoder_chunks");
+        let lengths = (0..=200).chain([20_000]);
+        for n in lengths {
+            let input = rng.bytes(n);
+            let payload = &encode(&input)[1..];
+            let mut chunkings: Vec<Vec<usize>> = (1..=40)
+                .map(|size| {
+                    let mut lens = vec![size; payload.len() / size];
+                    lens.extend(
+                        (!payload.len().is_multiple_of(size)).then_some(payload.len() % size),
+                    );
+                    lens
+                })
+                .collect();
+            chunkings.push(rng.split_points(payload.len()));
+            for lens in chunkings {
+                let mut dec = ScalarDecoder::new();
+                let mut out = Vec::new();
+                let mut rest = payload;
+                for &len in &lens {
+                    let (piece, tail) = rest.split_at(len);
+                    dec.decode(piece, &mut out);
+                    rest = tail;
+                }
+                dec.finish(&mut out);
+                assert!(
+                    out == input,
+                    "n={n}, chunks={:?}",
+                    &lens[..lens.len().min(4)]
+                );
+            }
+        }
+    }
+
+    /// The crash of bug 2: 1-character chunks overflowed the reservation.
+    #[test]
+    fn decoder_chunk_size_1() {
+        let input: Vec<u8> = (0u8..=255).cycle().take(20_000).collect();
+        let payload = &encode(&input)[1..];
+        let mut dec = ScalarDecoder::new();
+        let mut out = Vec::new();
+        for piece in payload.chunks(1) {
+            dec.decode(piece, &mut out);
+        }
+        dec.finish(&mut out);
+        assert!(out == input);
     }
 
     #[test]

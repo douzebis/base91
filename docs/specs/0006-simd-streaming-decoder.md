@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0006 — Fix SIMD streaming and wrapping corruption, two decoder buffer overruns, and early EOF in `io::DecoderReader`
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** —
+**Implemented in:** 2026-09-27
 
 ## Problem
 
@@ -436,6 +436,19 @@ baseline:
   and the release notes must mention them too. Users who encoded or
   decoded SIMD streams with 0.2.2 should re-check their outputs; encoded
   files hit by bug 3 can be repaired.
+
+## Implementation notes
+
+- §6: most of the listed tests already existed in the spec 0009 suite
+  (`tests/matrix.rs`, `tests/regressions.rs`, `base91-cli/tests/end_to_end.rs`),
+  skipped while their deviations were pending. Removing the deviations
+  switched them on; no separate `tests/simd_streaming.rs` was written. The
+  new tests are the `ScalarDecoder` chunking unit tests, the SIMD-stream
+  `io.rs` tests, and `base91/python-tests/` (run by the Nix `pybase91`
+  build).
+- §2: a chunk without a newline is decoded as a single segment, skipping
+  the split. The split's byte-wise scan cost more than the SIMD kernels
+  and made streaming decode about 3× slower than one-shot.
 
 ## Open questions
 

@@ -135,39 +135,41 @@ impl<R: Read> DecoderReader<R> {
 
 impl<R: Read> Read for DecoderReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        // Serve from the decoded buffer first.
-        if self.decoded_pos < self.decoded.len() {
-            let available = self.decoded.len() - self.decoded_pos;
-            let n = available.min(buf.len());
-            buf[..n].copy_from_slice(&self.decoded[self.decoded_pos..self.decoded_pos + n]);
-            self.decoded_pos += n;
-            return Ok(n);
-        }
-
-        if self.done {
+        if buf.is_empty() {
             return Ok(0);
         }
+        // Pull chunks until something is decoded: a chunk can decode to
+        // nothing (a lone newline from a pipe), and `Ok(0)` means end of file,
+        // so it is returned only once the inner reader is exhausted and the
+        // decoder flushed (spec 0006 §5c).
+        while self.decoded_pos == self.decoded.len() {
+            if self.done {
+                return Ok(0);
+            }
+            self.decoded.clear();
+            self.decoded_pos = 0;
 
-        // Refill: pull a chunk from the inner reader and decode it.
-        self.decoded.clear();
-        self.decoded_pos = 0;
-
-        let n = self.inner.read(self.read_buf.as_mut())?;
-        if n == 0 {
-            // Inner reader is exhausted: flush decoder state.
-            // Replace the decoder with a fresh default so we can take
-            // ownership of the old one (finish() consumes self).
-            core::mem::take(&mut self.decoder).finish(&mut self.decoded);
-            self.done = true;
-        } else {
-            self.decoder.decode(&self.read_buf[..n], &mut self.decoded);
+            let n = match self.inner.read(self.read_buf.as_mut()) {
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            };
+            if n == 0 {
+                // Inner reader is exhausted: flush decoder state.
+                // Replace the decoder with a fresh default so we can take
+                // ownership of the old one (finish() consumes self).
+                core::mem::take(&mut self.decoder).finish(&mut self.decoded);
+                self.done = true;
+            } else {
+                self.decoder.decode(&self.read_buf[..n], &mut self.decoded);
+            }
         }
 
-        // Serve from the freshly decoded buffer.
-        let available = self.decoded.len().min(buf.len());
-        buf[..available].copy_from_slice(&self.decoded[..available]);
-        self.decoded_pos = available;
-        Ok(available)
+        let available = self.decoded.len() - self.decoded_pos;
+        let n = available.min(buf.len());
+        buf[..n].copy_from_slice(&self.decoded[self.decoded_pos..self.decoded_pos + n]);
+        self.decoded_pos += n;
+        Ok(n)
     }
 }
 
@@ -250,6 +252,44 @@ mod tests {
                 out.extend_from_slice(&tmp[..n]);
             }
             assert_eq!(out, expected, "read_size={read_size}");
+        }
+    }
+
+    /// A SIMD stream larger than `BUF_SIZE`, so that the reader decodes it in
+    /// several chunks (spec 0006 §6, bug 1).
+    fn simd_stream(wrap: usize) -> (Vec<u8>, Vec<u8>) {
+        let input: Vec<u8> = (0u8..=255).cycle().take(3 * BUF_SIZE).collect();
+        let encoded = crate::simd::encode(&input, crate::simd::SimdLevel::default(), wrap);
+        (input, encoded)
+    }
+
+    #[test]
+    fn reader_matches_one_shot_simd() {
+        for wrap in [0, 64] {
+            let (input, encoded) = simd_stream(wrap);
+            let expected = crate::simd::decode(&encoded, crate::simd::SimdLevel::default());
+            assert_eq!(Some(decode_via_reader(&encoded)), expected, "wrap={wrap}");
+            assert_eq!(expected.unwrap(), input, "wrap={wrap}");
+        }
+    }
+
+    #[test]
+    fn reader_chunked_matches_one_shot_simd() {
+        for wrap in [0, 64] {
+            let (input, encoded) = simd_stream(wrap);
+            for read_size in [1, 7, 13, 64, 512] {
+                let mut dec = DecoderReader::new(encoded.as_slice());
+                let mut out = Vec::new();
+                let mut tmp = vec![0u8; read_size];
+                loop {
+                    let n = dec.read(&mut tmp).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    out.extend_from_slice(&tmp[..n]);
+                }
+                assert!(out == input, "wrap={wrap}, read_size={read_size}");
+            }
         }
     }
 }

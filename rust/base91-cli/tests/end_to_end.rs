@@ -23,8 +23,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
-const SIZES: [usize; 17] = [
-    0, 1, 12, 13, 14, 51, 52, 53, 104, 520, 8191, 8192, 8193, 12_000, 16_000, 100_000, 1_000_000,
+const SIZES: [usize; 18] = [
+    0, 1, 12, 13, 14, 51, 52, 53, 104, 520, 1000, 8191, 8192, 8193, 12_000, 16_000, 100_000,
+    1_000_000,
 ];
 
 fn ours() -> PathBuf {
@@ -217,7 +218,6 @@ fn legacy_decode_matches_upstream_cli() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "fixed by spec 0006, bug 1 (on 0.2.2: base91 -d corrupts SIMD streams from ~16 kB)"]
 fn simd_roundtrip_16000() {
     let x = input(16_000);
     let encoded = ok(&run(&ours(), &["--simd"], &x), "encode");
@@ -225,7 +225,6 @@ fn simd_roundtrip_16000() {
 }
 
 #[test]
-#[ignore = "fixed by spec 0006, bug 3 (on 0.2.2: corrupt output for sizes multiple of 52)"]
 fn simd_roundtrip_52() {
     let x = input(52);
     let encoded = ok(&run(&ours(), &["--simd"], &x), "encode");
@@ -234,7 +233,6 @@ fn simd_roundtrip_52() {
 }
 
 #[test]
-#[ignore = "fixed by spec 0006, bug 6 (on 0.2.2: base91 -d stops at a read that decodes to nothing)"]
 fn decode_from_slow_pipe() {
     // Bug 6's reproduction: the encoding of "hello, world" written to the
     // decoder's stdin in three parts with pauses, the middle one a lone LF.

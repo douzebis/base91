@@ -201,11 +201,70 @@ fn bench_decode_simd(c: &mut Criterion) {
     g.finish();
 }
 
+/// Wrapped one-shot encode and decode (the CLI default width, 64), best level.
+fn bench_simd_wrapped(c: &mut Criterion) {
+    use base91::simd::SimdLevel;
+    let input = seeded_bytes(SIZE);
+    let encoded = base91::simd::encode(&input, SimdLevel::default(), 64);
+
+    let mut g = c.benchmark_group("encode_simd_wrapped");
+    g.throughput(Throughput::Bytes(input.len() as u64));
+    g.bench_with_input(
+        BenchmarkId::new("simd256_w64", "1mib"),
+        &input,
+        |b, input| {
+            b.iter(|| base91::simd::encode(input, SimdLevel::Simd256, 64));
+        },
+    );
+    g.finish();
+
+    let mut g = c.benchmark_group("decode_simd_wrapped");
+    g.throughput(Throughput::Bytes(encoded.len() as u64));
+    g.bench_with_input(
+        BenchmarkId::new("simd256_w64", "1mib"),
+        &encoded,
+        |b, encoded| {
+            b.iter(|| base91::simd::decode(encoded, SimdLevel::Simd256));
+        },
+    );
+    g.finish();
+}
+
+/// Streaming decode in 8 KiB chunks, as `io::DecoderReader` reads them.
+fn bench_decode_simd_streaming(c: &mut Criterion) {
+    use base91::simd::{Decoder, SimdLevel};
+    let input = seeded_bytes(SIZE);
+
+    let mut g = c.benchmark_group("decode_simd_streaming");
+    for wrap in [0, 64] {
+        let encoded = base91::simd::encode(&input, SimdLevel::default(), wrap);
+        g.throughput(Throughput::Bytes(encoded.len() as u64));
+        g.bench_with_input(
+            BenchmarkId::new(format!("simd256_w{wrap}"), "1mib"),
+            &encoded,
+            |b, encoded| {
+                b.iter(|| {
+                    let mut decoder = Decoder::new(SimdLevel::Simd256);
+                    let mut out = Vec::with_capacity(input.len());
+                    for chunk in encoded.chunks(8192) {
+                        decoder.decode(chunk, &mut out);
+                    }
+                    decoder.finish(&mut out);
+                    out
+                });
+            },
+        );
+    }
+    g.finish();
+}
+
 criterion_group!(
     benches,
     bench_encode,
     bench_decode,
     bench_encode_simd,
-    bench_decode_simd
+    bench_decode_simd,
+    bench_simd_wrapped,
+    bench_decode_simd_streaming
 );
 criterion_main!(benches);

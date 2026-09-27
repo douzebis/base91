@@ -26,12 +26,39 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   result. Only direct Rust callers of these two functions were affected;
   the CLI, `pybase91` and the `io` adapters never called them. Upgrade to
   0.2.3.
+- `simd::scalar::ScalarDecoder::decode` (`base91-rs` 0.2.2 only), a safe
+  function, wrote one byte past its reservation when a character was
+  pending from the previous call: heap corruption from safe code, observed
+  as an abort with 1-character chunks. Reachable only by using
+  `ScalarDecoder` directly. It now reserves one more byte. Upgrade to
+  0.2.3.
 
 ### Fixed
 
+- `base91 -d` and `io::DecoderReader` could silently corrupt SIMD streams
+  of about 16 kB and more (`base91-rs`, `base91-cli` 0.2.2):
+  `simd::Decoder` lost its state at every chunk boundary. It now carries
+  its state across chunks and gives exactly the one-shot result for any
+  chunking. Streaming decode throughput, 8 KiB chunks, AVX2 (measured on
+  an Intel Core Ultra 7 165U VM, one pinned vCPU): 3.98 GiB/s unwrapped
+  (the one-shot speed), 1.40 GiB/s wrapped at 64 columns.
+- `base91 --simd` wrote corrupt output for inputs whose size is a multiple
+  of 52 bytes (default wrap), or generally whenever the payload filled its
+  last line (`simd::encode` with `wrap > 0`, 0.2.2): the first payload
+  character was duplicated before the first newline. **Repair** such a
+  file by deleting the single character between `-` and the first newline.
+  Users who encoded or decoded SIMD streams with 0.2.2 should re-check
+  their outputs.
+- `simd::Encoder` turned an empty stream into `-`; it now gives the empty
+  stream, like `simd::encode`.
+- The streaming decoder (Rust `Decoder`, Python `pybase91.Decoder`) could
+  panic when fed very small chunks (0.2.0–0.2.2, crates.io and PyPI).
+- `base91 -d` and `io::DecoderReader` could stop early and silently drop
+  the rest of the input when it arrived in pieces, e.g. from a pipe
+  (0.2.0–0.2.2): a read that decoded to nothing was reported as end of
+  file.
 - `simd::encode_unchecked` on empty input now writes nothing and returns
   0, like `simd::encode` (it used to write `-`).
-
 - `base91-rs` now builds under `no_std` (issue #1): `std` items used
   without a feature gate were replaced by their `core` / `alloc`
   equivalents or gated, and SIMD detection falls back to compile-time
@@ -45,6 +72,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `alloc` feature (implied by `std`): the `Vec`-based API under `no_std`.
   Without it, the crate exposes the size hints, the Henke `*_unchecked`
   functions and `simd::detect()`.
+
+### Changed
+
+- Wrapped SIMD output now ends with a newline (spec 0008 §3.4). Every
+  0.2.x decoder accepts it.
+- Wrapped SIMD encoding is about 3× faster (the newlines are inserted a
+  line at a time).
 
 ### Removed
 

@@ -373,6 +373,45 @@ fn encode_into(input: &[u8], max_level: SimdLevel, wrap: usize, output: &mut Vec
     }
 }
 
+/// Decodes the longest prefix of `input` made of whole 16-character blocks
+/// with the SIMD kernels, and returns its length (0 at the scalar level).
+/// `None` if a kernel rejected its input. Used by the streaming decoder.
+#[cfg(feature = "alloc")]
+fn decode_blocks(input: &[u8], max_level: SimdLevel, output: &mut Vec<u8>) -> Option<usize> {
+    match effective_level(max_level) {
+        #[cfg(target_arch = "x86_64")]
+        ArchLevel::Avx2 => {
+            let full = (input.len() / 32) * 32;
+            if !unsafe { x86::decode_avx2(&input[..full], output) } {
+                return None;
+            }
+            let sse_full = ((input.len() - full) / 16) * 16;
+            if sse_full > 0 && !unsafe { x86::decode_sse41(&input[full..full + sse_full], output) }
+            {
+                return None;
+            }
+            Some(full + sse_full)
+        }
+        #[cfg(target_arch = "x86_64")]
+        ArchLevel::Sse41 => {
+            let full = (input.len() / 16) * 16;
+            if !unsafe { x86::decode_sse41(&input[..full], output) } {
+                return None;
+            }
+            Some(full)
+        }
+        #[cfg(target_arch = "aarch64")]
+        ArchLevel::Neon => {
+            let full = (input.len() / 16) * 16;
+            if !unsafe { aarch64::decode_neon(&input[..full], output) } {
+                return None;
+            }
+            Some(full)
+        }
+        ArchLevel::Scalar => Some(0),
+    }
+}
+
 #[cfg(feature = "alloc")]
 fn decode_into(input: &[u8], max_level: SimdLevel, output: &mut Vec<u8>) -> bool {
     // Strip any \n bytes (inserted by --wrap during encoding) before dispatching
@@ -432,56 +471,44 @@ fn decode_into(input: &[u8], max_level: SimdLevel, output: &mut Vec<u8>) -> bool
     }
 }
 
-/// Insert `\n` after the leading `-` and after every `wrap` payload characters.
+/// Wraps the payload that follows the leading `-` (spec 0008 §3.4).
 ///
-/// Output layout: `-\n` then payload split into lines of exactly `wrap` chars
-/// (last line may be shorter).  Every payload line is the same width, making
-/// the output easy to inspect and the decoder's job uniform.
+/// Output layout: `-` LF, then the payload in lines of exactly `wrap`
+/// characters (the last one 1 to `wrap` characters), every line followed by
+/// LF, the last one included: 1 + ⌈payload / wrap⌉ newlines in all. Needs a
+/// non-empty payload.
 #[cfg(feature = "alloc")]
 fn insert_wrap_newlines(output: &mut Vec<u8>, wrap: usize) {
-    // payload starts at index 1 (after '-')
     let payload_len = output.len() - 1;
-    // One \n after '-', plus one \n after each full wrap-sized block.
-    let newline_count = 1 + payload_len / wrap;
-    // Grow the buffer to fit the newlines, then shift right-to-left.
-    output.resize(output.len() + newline_count, 0);
-    let buf = unsafe { core::slice::from_raw_parts_mut(output.as_mut_ptr(), output.len()) };
-    let total = buf.len();
-    // dst: write cursor (from the end); src: read cursor into original payload.
-    let mut dst = total - 1;
-    // last byte of original payload (in the now-grown buffer, before shift)
-    let mut src = total - 1 - newline_count;
-    // Number of chars in the trailing partial block.
-    let mut col = payload_len % wrap;
-    if col == 0 {
-        col = wrap;
+    let lines = payload_len.div_ceil(wrap);
+    output.resize(output.len() + 1 + lines, 0);
+    let buf = output.as_mut_slice();
+    // Move the lines right, last one first, each to its final place followed
+    // by its LF. Every move goes rightward, so nothing unread is overwritten.
+    let mut dst_end = buf.len();
+    let mut src_end = 1 + payload_len;
+    let mut len = payload_len - (lines - 1) * wrap;
+    while src_end > 1 {
+        dst_end -= 1;
+        buf[dst_end] = b'\n';
+        buf.copy_within(src_end - len..src_end, dst_end - len);
+        dst_end -= len;
+        src_end -= len;
+        len = wrap;
     }
-    loop {
-        // Copy `col` payload chars rightward.
-        for _ in 0..col {
-            buf[dst] = buf[src];
-            dst -= 1;
-            src -= 1;
-        }
-        buf[dst] = b'\n';
-        dst -= 1;
-        if src == 0 {
-            // src==0: we just passed the '-' prefix byte; the \n we just wrote
-            // is the post-'-' header newline.  Done.
-            break;
-        }
-        col = wrap;
-    }
+    debug_assert_eq!(dst_end, 2);
+    buf[1] = b'\n';
 }
 
 // ---------------------------------------------------------------------------
 // Streaming encoder
 // ---------------------------------------------------------------------------
 
-/// Stateful SIMD fixed-width encoder. Wrap is built in — no second pass.
+/// Stateful SIMD fixed-width encoder (no line wrapping).
 ///
 /// Feed input with [`Encoder::encode`]; flush with [`Encoder::finish`].
-/// The `-` prefix is written on the first `encode` call.
+/// The `-` prefix is written with the first non-empty input, so an encoder
+/// that only sees empty input produces the empty stream, like [`encode`].
 #[cfg(feature = "alloc")]
 pub struct Encoder {
     scalar: scalar::ScalarEncoder,
@@ -500,8 +527,11 @@ impl Encoder {
     }
 
     /// Encode `input`, appending SIMD-variant characters to `output`.
-    /// Writes the `-` prefix on the first call.
+    /// Writes the `-` prefix with the first non-empty input.
     pub fn encode(&mut self, input: &[u8], output: &mut Vec<u8>) {
+        if input.is_empty() {
+            return;
+        }
         if !self.prefix_written {
             output.push(b'-');
             self.prefix_written = true;
@@ -601,9 +631,9 @@ impl Decoder {
         }
         if !self.format_detected {
             self.format_detected = true;
-            if input[0] == b'-' {
+            if let Some(payload) = input.strip_prefix(b"-") {
                 self.is_simd = true;
-                return decode_into(&input[1..], self.max_level, output);
+                return self.decode_simd(payload, output);
             } else {
                 self.is_simd = false;
                 self.henke = Some(crate::Decoder::new());
@@ -612,11 +642,43 @@ impl Decoder {
             }
         }
         if self.is_simd {
-            decode_into(input, self.max_level, output)
+            self.decode_simd(input, output)
         } else {
             self.henke.as_mut().unwrap().decode(input, output);
             true
         }
+    }
+
+    /// SIMD payload characters, possibly wrapped: each `\n`-separated
+    /// segment in turn, with the state carried across segments and chunks
+    /// (spec 0006 §2).
+    fn decode_simd(&mut self, input: &[u8], output: &mut Vec<u8>) -> bool {
+        // Unwrapped streams have no newline: skip the split, whose byte-wise
+        // scan costs more than the SIMD kernels (`contains` is a memchr).
+        if !input.contains(&b'\n') {
+            return self.decode_segment(input, output);
+        }
+        input
+            .split(|&b| b == b'\n')
+            .all(|segment| self.decode_segment(segment, output))
+    }
+
+    /// One run of payload characters without newlines.
+    fn decode_segment(&mut self, segment: &[u8], output: &mut Vec<u8>) -> bool {
+        // Drain to a block boundary (at most 15 characters), so that the
+        // kernels start aligned.
+        let mut i = 0;
+        while i < segment.len() && !self.scalar.is_aligned() {
+            self.scalar.decode(&segment[i..i + 1], output);
+            i += 1;
+        }
+        let rest = &segment[i..];
+        let Some(done) = decode_blocks(rest, self.max_level, output) else {
+            return false;
+        };
+        // Fewer than 16 characters: kept in the scalar state, not flushed.
+        self.scalar.decode(&rest[done..], output);
+        true
     }
 
     pub fn finish(self, output: &mut Vec<u8>) {

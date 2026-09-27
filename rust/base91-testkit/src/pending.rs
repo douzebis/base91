@@ -41,14 +41,7 @@ pub enum Deviation {
 }
 
 /// Deviations not fixed yet.
-pub const PENDING: &[Deviation] = &[
-    Deviation::SimdStreamingDecoder,
-    Deviation::SimdWrappedEncoding,
-    Deviation::SimdStreamingEncoderEmpty,
-    Deviation::LegacyStreamingDecoder,
-    Deviation::IoReaderEarlyEof,
-    Deviation::SimdStrictDecoding,
-];
+pub const PENDING: &[Deviation] = &[Deviation::SimdStrictDecoding];
 
 /// Whether `deviation` is still pending.
 pub fn is_pending(deviation: Deviation) -> bool {

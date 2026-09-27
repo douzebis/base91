@@ -48,6 +48,7 @@ let
       || builtins.match ".*/tests/fixtures/.*" path != null
       || builtins.match ".*/base91-testkit/reference(/.*)?" path != null
       || builtins.match ".*/base91/fuzz/corpus(/.*)?" path != null
+      || builtins.match ".*/base91/python-tests(/.*)?" path != null
       || builtins.match ".*/README\\.md$" path != null;
   };
 
@@ -432,10 +433,17 @@ let
 
     maturinBuildFlags = [ "--features" "python" ];
 
+
     # Importing the package loads the compiled extension: fails if the wheel
     # has none, which maturin produces silently when it misdetects the
     # bindings (spec 0004 §6, §7).
     pythonImportsCheck = [ "pybase91" ];
+
+    # Python-side tests (spec 0006 §6: the streaming decoder, bug 5). The
+    # check phase runs from the workspace root, next to no pybase91 source
+    # directory, so the tests import the installed package.
+    nativeCheckInputs = [ pkgs.python313Packages.pytestCheckHook ];
+    enabledTestPaths  = [ "base91/python-tests" ];
 
     env.PYO3_PYTHON = pythonExecutable;
 
