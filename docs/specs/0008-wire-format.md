@@ -199,6 +199,8 @@ where:
   to the payload-length rule.) A single line of length 0 is allowed only
   if the payload is empty (`-` followed by TERM);
 - the total payload length L satisfies L mod 16 ∉ {1, 6, 11};
+- every character pair of the payload has a value of at most 8191 (see
+  *invalid value* below);
 - trailing whitespace is ignored. This covers the canonical final LF
   (§3.4), its absence (streams written by 0.2.2 and earlier), and a
   newline added by an editor.
@@ -215,6 +217,14 @@ return data:
 | invalid character | a byte outside the alphabet in the payload, e.g. `"`, a space, or a CR that is not part of the stream's CR LF terminator |
 | invalid layout | lines of unequal length, W not a multiple of 32, mixed LF / CR LF, a terminator in the middle of a line |
 | invalid length | L mod 16 ∈ {1, 6, 11} |
+| invalid value | a character pair whose value `index(lo) + 91·index(hi)` exceeds 8191 |
+
+About **invalid value**: two characters can express 0 … 8280 (90 + 91·90),
+but a 13-bit group only holds 0 … 8191, so no encoder produces a pair worth
+8192 … 8280. Such a pair is structural corruption and MUST be reported.
+Silently truncating it to 13 bits, or letting its 14th bit spill into the
+next group, would both return wrong data. The check costs one comparison
+per pair (one vector compare per block).
 
 Decoders MAY also reject nonzero padding bits (§3.2 rule 4), but they are
 not required to check them.
@@ -336,12 +346,13 @@ this spec. Where a fix is already specified, the spec is named.
 | A11 | Invalid characters | Decoded as garbage: **wrong output, no error**; `Decoder::decode` returns `true`; `simd::decode` never returns `None` | Error | New (needs an error type; see spec 0007's `Error`) |
 | A12 | Invalid payload length (L mod 16 ∈ {1, 6, 11}) | Decoded silently (a lone character is flushed as a byte) | Error | New |
 | A13 | Irregular layouts | One-shot decode strips every LF anywhere (heap copy); anything else becomes garbage | Error (§3.5) | New |
+| A13b | Pair value above 8191 | The scalar decoder adds the value to its bit queue as is, so the 14th bit spills into the next group: **wrong output, no error** | Error, invalid value (§3.5) | New (with A9–A13) |
 | A14 | Sizes | `encode_size_hint` / `decode_size_hint` are upper bounds | Exact E and D exist (§3.3); APIs may expose them | Spec 0007 |
 | A15 | Legacy conformance | Encoder and decoder tested against the reference test vectors (`tests/reference_vectors.rs`, sha256 of the C `test.sh` fixtures). Decoding of garbage-laden input vs the reference is not explicitly tested. | §4 | New: differential test against upstream 0.6.0 with random junk inserted |
 | A16 | Trailing LF on input | Accepted (stripped) | Accepted | — |
 | A17 | Level independence | Verified: identical output at `Scalar`, `Simd128`, `Simd256` for n = 0 … 3000 and W ∈ {0, 16, 32, 48, 64} (x86_64) | §3.4 | Keep as a test |
 | A18 | Spec 0002 API section | `simd::decode` "returns `None` if no `-`", `decode_unchecked` "returns `usize::MAX`", `Encoder::new(level, wrap)`: none of these match the code (Henke fallback; no wrap in the streaming encoder) | Out of scope here (API spec) | To be superseded by an API contract spec |
 
-Items marked "New" have no spec yet. Most of them (A9–A13) are the decoder
+Items marked "New" have no spec yet. Most of them (A9–A13b) are the decoder
 acceptance rules of §3.5 and belong together in one "strict SIMD decoder"
 spec, which should build on spec 0006's streaming decoder.

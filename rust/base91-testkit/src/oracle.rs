@@ -254,11 +254,10 @@ fn parse_wrapped(stream: &[u8], start: usize) -> Result<Vec<u8>, DecodeError> {
 
 /// Unpacks validated payload characters (§3.2 in reverse, §3.3).
 ///
-/// Note: spec 0008 does not yet say what a decoder does with a character
-/// pair worth more than 8191 (values 8192..=8280 are expressible with two
-/// characters but not with 13 bits). This model rejects such a pair as
-/// [`DecodeError::InvalidValue`]; pending confirmation in spec 0008.
-/// Padding bits (§3.2 rule 4) are ignored, as §3.5 allows.
+/// A character pair worth more than 8191 (values 8192..=8280 are
+/// expressible with two characters but not with 13 bits) is rejected as
+/// [`DecodeError::InvalidValue`] (§3.5, *invalid value*). Padding bits
+/// (§3.2 rule 4) are ignored, as §3.5 allows.
 fn decode_payload(payload: &[u8], offset_base: usize) -> Result<Vec<u8>, DecodeError> {
     let Some(n) = decoded_len(payload.len()) else {
         return Err(DecodeError::InvalidLength);

@@ -23,7 +23,7 @@ Reading the code while writing specs 0004–0008 turned up five bugs in
 | wrapped SIMD encoding when the payload fills its last line (CLI, sizes multiple of 52) | data corruption | 0006, bug 3 |
 | streaming encoder turns empty into `-` | inconsistency | 0006, bug 4 |
 
-Plus the silent wrong output on invalid input (spec 0008, annex A9–A13),
+Plus the silent wrong output on invalid input (spec 0008, annex A9–A13b),
 and a `no_std` build that never compiled (spec 0004).
 
 None of this was caught, because the existing tests:
@@ -285,7 +285,7 @@ run locally.
 | 0006 bug 2 | `scalar_decoder_chunk_size_1` | abort / debug-assert panic |
 | 0006 bug 3 | `simd_wrap_payload_fills_last_line` (n = 26, W = 32; n = 52, W = 64), CLI `simd_roundtrip_52` | wrong output |
 | 0006 bug 4 | `simd_streaming_encoder_empty` | `-` instead of empty |
-| 0008 A9–A13 | `strict_decoder_*` (one per annex item) | wrong output without error |
+| 0008 A9–A13b | `strict_decoder_*` (one per annex item) | wrong output without error |
 | 0004 | `rust-nostd*` builds | build failure |
 
 The regression inputs also go into the fuzz corpus (§6).
