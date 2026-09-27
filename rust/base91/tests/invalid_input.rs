@@ -16,11 +16,10 @@
 use base91::simd::{self, SimdLevel};
 use base91_testkit::mutate::mutations;
 use base91_testkit::oracle::{self, Classification};
-use base91_testkit::pending::{is_pending, Deviation};
+use base91_testkit::pending::{is_pending, quiet_expected_panics, Deviation};
 use base91_testkit::rng::{full_matrix, Rng};
 use std::io::Read;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::Once;
 
 const LEVELS: [SimdLevel; 3] = [SimdLevel::Scalar, SimdLevel::Simd128, SimdLevel::Simd256];
 
@@ -40,27 +39,6 @@ fn edits() -> usize {
     } else {
         6
     }
-}
-
-/// While `SimdStrictDecoding` is pending, the scalar SIMD decoder panics on
-/// an arithmetic overflow for invalid characters when overflow checks are
-/// on (spec 0008 annex A11). This hook keeps those expected panics out of
-/// the log; every other panic message is printed as usual.
-fn quiet_known_overflow_panics() {
-    static INSTALL: Once = Once::new();
-    INSTALL.call_once(|| {
-        let default_hook = panic::take_hook();
-        panic::set_hook(Box::new(move |info| {
-            let in_scalar = info
-                .location()
-                .is_some_and(|l| l.file().ends_with("simd/scalar.rs"));
-            let overflow = info.to_string().contains("with overflow");
-            let expected = in_scalar && overflow && is_pending(Deviation::SimdStrictDecoding);
-            if !expected {
-                default_hook(info);
-            }
-        }));
-    });
 }
 
 /// Decodes `stream` with every SIMD-module decoder (all levels, one-shot,
@@ -83,7 +61,7 @@ fn decode_all_ways(stream: &[u8]) -> Option<Vec<u8>> {
 
 #[test]
 fn mutated_simd_streams() {
-    quiet_known_overflow_panics();
+    quiet_expected_panics();
     let strict_pending = is_pending(Deviation::SimdStrictDecoding);
     let mut rng = Rng::for_test("mutated_simd_streams");
     let (mut compared, mut skipped, mut panicked) = (0usize, 0usize, 0usize);

@@ -46,7 +46,15 @@ fn run(exe: &Path, args: &[&str], stdin: &[u8]) -> Output {
     // pipe while the child's stdout fills up too.
     let writer = std::thread::spawn(move || pipe.write_all(&data));
     let output = child.wait_with_output().unwrap();
-    writer.join().unwrap().unwrap();
+    // A process may exit without reading its input (e.g. on an argument
+    // error); the write then fails with a broken pipe, which is not a test
+    // failure. Any other write error is.
+    match writer.join().unwrap() {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
+            panic!("writing to {}: {e}", exe.display())
+        }
+        _ => {}
+    }
     output
 }
 

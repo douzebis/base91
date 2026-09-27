@@ -286,6 +286,39 @@ and run by its own Nix attribute `rust-perf` (release build):
 detailed numbers. The performance budgets in specs 0006 (§7), 0007 (§7) and
 0008 (§3.5, error detection ≤ 3 %) are measured there.
 
+Implementation notes (phase 4):
+
+- **Fuzzing (§6):** the fuzz crate is the workspace member
+  `rust/base91/fuzz` (`base91-fuzz`). Its check functions live in its
+  library, shared by the four libFuzzer targets and by the engine-free
+  corpus replay (`tests/corpus_replay.rs`, run by `rust-tests`).
+  `libfuzzer-sys` is optional (feature `libfuzzer`), so workspace builds
+  never compile libFuzzer. The committed seed corpus has 38 inputs,
+  covering the known bugs' triggers and spec 0008's tricky stream forms.
+- **Fuzzing while the strict decoder is pending:** libFuzzer aborts on any
+  panic, and with overflow checks on, the scalar SIMD decoder panics on
+  invalid characters (annex A11). `rust-fuzz` therefore builds with
+  `-Coverflow-checks=off` until then; debug assertions stay on. Under
+  `cargo test`, the same panic is caught instead
+  (`pending::quiet_expected_panics` keeps it out of the log).
+- **First runs:** 30 to 60 s per target found one bug, in the test code
+  itself. `check_legacy` compared the auto-detecting `simd::decode` with
+  upstream on a stream that classifies as SIMD (it began with `-`). Fixed,
+  and the input was added to the corpus. After that, tens of millions of
+  runs per target came out clean.
+- **Performance (§10):** calibrated on 2026-09-27 (see `perf_sanity.rs`
+  for the measured table), with thresholds per direction (encode,
+  decode), since the two behave very differently. Two findings for future
+  specs:
+  - wrapping (W = 64) currently costs 60–85 % of SIMD throughput;
+  - `Simd256` is barely faster than `Simd128` (×0.87–1.45 depending on
+    run and direction).
+
+  The wrapped thresholds are to be raised once spec 0008's in-place layout
+  is implemented. `rust-perf` runs in its own CI job.
+- **Dev shell:** `cargo-fuzz` and `qemu-user` are added (`cargo-llvm-cov`
+  comes with §11 coverage, phase 5).
+
 ### 11 — CI layout
 
 All attributes in `default.nix`, built from the pinned nixpkgs:

@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name        = "base91-fuzz"
+version     = "0.0.0"
+edition     = "2021"
+rust-version = "1.91"
+description = "Fuzz targets for base91-rs (spec 0009 §6); never published"
+license     = "MIT"
+publish     = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[features]
+# The libFuzzer engine, for `cargo fuzz run` (the targets need it). Off by
+# default, so that workspace builds and the corpus replay test never compile
+# libFuzzer.
+libfuzzer = ["dep:libfuzzer-sys"]
+# Compares legacy decoding with the upstream reference (needs a C compiler).
+reference = ["base91-testkit/reference"]
+
+[dependencies]
+base91         = { package = "base91-rs", path = ".." }
+base91-testkit = { path = "../../base91-testkit" }
+libfuzzer-sys  = { version = "0.4", optional = true }
+
+[[bin]]
+name              = "fuzz_decode"
+path              = "fuzz_targets/fuzz_decode.rs"
+test              = false
+doc               = false
+bench             = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name              = "fuzz_roundtrip"
+path              = "fuzz_targets/fuzz_roundtrip.rs"
+test              = false
+doc               = false
+bench             = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name              = "fuzz_unchecked"
+path              = "fuzz_targets/fuzz_unchecked.rs"
+test              = false
+doc               = false
+bench             = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name              = "fuzz_legacy"
+path              = "fuzz_targets/fuzz_legacy.rs"
+test              = false
+doc               = false
+bench             = false
+required-features = ["libfuzzer"]

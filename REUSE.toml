@@ -31,3 +31,9 @@ path = [
 ]
 SPDX-FileCopyrightText = "2000-2006 Joachim Henke"
 SPDX-License-Identifier = "BSD-3-Clause"
+
+# Fuzz corpus (spec 0009 §6): generated binary inputs, no room for headers.
+[[annotations]]
+path = "rust/base91/fuzz/corpus/**"
+SPDX-FileCopyrightText = "2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)"
+SPDX-License-Identifier = "MIT"

@@ -9,6 +9,8 @@
   # Seed for the randomized tests (spec 0009). CI passes the commit hash, so
   # reruns of a commit test the same cases; null keeps the suite's default.
 , testSeed ? null
+  # Seconds of libFuzzer per fuzz target in the rust-fuzz attribute.
+, fuzzSeconds ? 60
 }:
 
 let
@@ -36,15 +38,16 @@ let
 
   # Source for pure-Rust builds (scoped to rust/ so C sources don't affect
   # the hash).  The filter retains Cargo sources, binary test fixtures,
-  # README.md files (maturin reads them from Cargo.toml's readme field), and
-  # the vendored upstream basE91 0.6.0 used as the legacy test oracle
-  # (base91-testkit, spec 0009).
+  # README.md files (maturin reads them from Cargo.toml's readme field), the
+  # vendored upstream basE91 0.6.0 used as the legacy test oracle
+  # (base91-testkit), and the fuzz corpus (spec 0009).
   rustSrc = pkgs.lib.cleanSourceWith {
     src    = pkgs.lib.cleanSource ./rust;
     filter = path: type:
       crane.filterCargoSources path type
       || builtins.match ".*/tests/fixtures/.*" path != null
       || builtins.match ".*/base91-testkit/reference(/.*)?" path != null
+      || builtins.match ".*/base91/fuzz/corpus(/.*)?" path != null
       || builtins.match ".*/README\\.md$" path != null;
   };
 
@@ -54,7 +57,7 @@ let
   # rejects features of packages a command does not select, so attributes
   # selecting only the library use the first variable.
   referenceTestsFeature    = "--features base91-rs/reference-tests";
-  referenceTestsFeatureAll = "--features base91-rs/reference-tests,base91-cli/reference-tests";
+  referenceTestsFeatureAll = "--features base91-rs/reference-tests,base91-cli/reference-tests,base91-fuzz/reference";
 
   # Source tree extended with src/base91.{c,h} for bench builds that enable
   # --features c-compat-tests.  The C files are placed at src/ relative to
@@ -133,6 +136,51 @@ let
       mkdir -p $out
       cp test-output.txt $out/
     '';
+  });
+
+  # Long fuzzing runs (spec 0009 §6): libFuzzer through cargo-fuzz on the
+  # pinned stable rustc (-s none: no sanitizer, none is available), each
+  # target for fuzzSeconds, starting from the committed corpus. A crash
+  # fails the build; libFuzzer's log and any crash inputs are kept in $out.
+  # Not part of the blocking CI (manual or scheduled).
+  #
+  # Overflow checks are off while spec 0008's strict decoder is pending:
+  # the scalar SIMD decoder overflows on invalid characters (annex A11),
+  # and libFuzzer aborts on any panic. Debug assertions, which catch
+  # out-of-bounds writes, stay on.
+  rustFuzz = crane.mkCargoDerivation (rustCommon // {
+    pname             = "base91-fuzz";
+    cargoArtifacts    = null;
+    nativeBuildInputs = rustCommon.nativeBuildInputs ++ [ pkgs.cargo-fuzz ];
+    RUSTFLAGS         = "-Coverflow-checks=off";
+    buildPhaseCargoCommand = ''
+      cd base91
+      status=0
+      for target in fuzz_decode fuzz_roundtrip fuzz_unchecked fuzz_legacy; do
+        mkdir -p ../corpus-run/$target
+        cp fuzz/corpus/$target/* ../corpus-run/$target/
+        cargo fuzz run -s none --features libfuzzer,reference $target \
+          ../corpus-run/$target -- -max_total_time=${toString fuzzSeconds} \
+          >> ../fuzz-log.txt 2>&1 || status=1
+      done
+      cd ..
+      test "$status" -eq 0 || { tail -40 fuzz-log.txt; exit 1; }
+    '';
+    doCheck = false;
+    installPhaseCommand = ''
+      mkdir -p $out
+      cp fuzz-log.txt $out/
+      cp -r base91/fuzz/artifacts $out/ 2>/dev/null || true
+    '';
+  });
+
+  # Relative performance sanity test (spec 0009 §10): plain release build,
+  # without the debug assertions of the test attributes, which would distort
+  # the timings. Asserts ratios between SIMD levels and layouts only.
+  rustPerf = crane.cargoTest (rustCommon // {
+    pname              = "base91-perf";
+    cargoArtifacts     = rustDeps;
+    cargoTestExtraArgs = "-p base91-rs --test perf_sanity -- --ignored --nocapture";
   });
 
   # The full differential matrix and property runs (spec 0009 §2, §11).
@@ -294,7 +342,7 @@ let
       pname   = "pybase91";
       version = "0.2.2";
       src     = rustSrc;
-      hash    = "sha256-icmO5IgNrQj28ESjzss1jOSkoVUexC/fzACAQV0DEY8=";
+      hash    = "sha256-COM1wRf0AlxbNXdPfaS1Ap/o99FA/rKXLoLTSKQctbo=";
     };
 
     # maturin must be invoked from the crate subdirectory (not the workspace root)
@@ -353,6 +401,9 @@ let
       gh
       # Nix tooling
       nix-update
+      # Test tooling (spec 0009): libFuzzer driver, aarch64 user-mode emulation
+      cargo-fuzz
+      qemu-user
       # Man page viewer
       mandoc
       # Profiling — samply works on Linux (perf_event_open) and macOS (ktrace)
@@ -395,5 +446,7 @@ in
   rust-tests    = rustTests;
   rust-tests-full = rustTestsFull;
   rust-tests-aarch64 = rustTestsAarch64;
+  rust-fuzz     = rustFuzz;
+  rust-perf     = rustPerf;
   go-tests      = goTests;
 }

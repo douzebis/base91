@@ -56,3 +56,31 @@ pub const PENDING: &[Deviation] = &[
 pub fn is_pending(deviation: Deviation) -> bool {
     PENDING.contains(&deviation)
 }
+
+/// Keeps the *expected* panics of pending deviations out of the test log.
+///
+/// While `SimdStrictDecoding` is pending, the scalar SIMD decoder panics on
+/// an arithmetic overflow for invalid characters when overflow checks are
+/// on (spec 0008 annex A11); tests catch and count those panics. This
+/// installs, once per process, a panic hook that stays silent for exactly
+/// that case and prints every other panic as usual.
+///
+/// Test binaries only: under libFuzzer, replacing its panic hook would stop
+/// it from reporting crashes.
+pub fn quiet_expected_panics() {
+    use std::sync::Once;
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let in_scalar = info
+                .location()
+                .is_some_and(|l| l.file().ends_with("simd/scalar.rs"));
+            let overflow = info.to_string().contains("with overflow");
+            let expected = in_scalar && overflow && is_pending(Deviation::SimdStrictDecoding);
+            if !expected {
+                default_hook(info);
+            }
+        }));
+    });
+}

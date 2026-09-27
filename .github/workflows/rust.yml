@@ -53,3 +53,22 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: nix-build default.nix -A rust-tests-full --argstr testSeed "${{ github.sha }}"
 
+  # Relative performance (spec 0009 §10), in its own job so that a noisy
+  # runner cannot block the correctness job. Asserts ratios between SIMD
+  # levels and layouts, not absolute speed.
+  perf:
+    name: perf (relative)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: cachix/cachix-action@v17
+        with:
+          name: base91
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        continue-on-error: true
+
+      - name: cargo test (perf_sanity)
+        run: nix-build default.nix -A rust-perf
