@@ -343,7 +343,7 @@ this spec. Where a fix is already specified, the spec is named.
 | A8 | Decoder bounded state | `ScalarDecoder` overflows its reservation with a pending character (heap corruption) | §3.6 | Spec 0006, bug 2 |
 | A9 | CR LF | `\r` decoded as data: **wrong output, no error** | Accepted (§3.5) | New |
 | A10 | Whitespace before `-` | Classified as legacy: **wrong output, no error** | Skipped (§2) | New |
-| A11 | Invalid characters | Decoded as garbage: **wrong output, no error**; `Decoder::decode` returns `true`; `simd::decode` never returns `None` | Error | New (needs an error type; see spec 0007's `Error`) |
+| A11 | Invalid characters | Decoded as garbage: **wrong output, no error** (with overflow checks on, as in debug builds, the scalar decoder instead panics on an arithmetic overflow); `Decoder::decode` returns `true`; `simd::decode` never returns `None` | Error | New (needs an error type; see spec 0007's `Error`) |
 | A12 | Invalid payload length (L mod 16 ∈ {1, 6, 11}) | Decoded silently (a lone character is flushed as a byte) | Error | New |
 | A13 | Irregular layouts | One-shot decode strips every LF anywhere (heap copy); anything else becomes garbage | Error (§3.5) | New |
 | A13b | Pair value above 8191 | The scalar decoder adds the value to its bit queue as is, so the 14th bit spills into the next group: **wrong output, no error** | Error, invalid value (§3.5) | New (with A9–A13) |

@@ -13,7 +13,9 @@ SPDX-License-Identifier: MIT
 ## Problem
 
 Reading the code while writing specs 0004–0008 turned up five bugs in
-0.2.2, three of which corrupt data and two memory:
+0.2.2, three of which corrupt data and two memory. The first run of the §2
+matrix and invalid-input tests found two more, in code shared by both
+formats:
 
 | Bug | Kind | Spec |
 |---|---|---|
@@ -22,6 +24,8 @@ Reading the code while writing specs 0004–0008 turned up five bugs in
 | `ScalarDecoder` writes past its reservation | memory corruption (safe API) | 0006, bug 2 |
 | wrapped SIMD encoding when the payload fills its last line (CLI, sizes multiple of 52) | data corruption | 0006, bug 3 |
 | streaming encoder turns empty into `-` | inconsistency | 0006, bug 4 |
+| legacy `Decoder` panics on small chunks (also `pybase91.Decoder`, 0.2.0–0.2.2) | crash | 0006, bug 5 |
+| `io::DecoderReader` returns EOF early when a read decodes to nothing (CLI `-d` on pipes, 0.2.0–0.2.2) | data loss (truncation) | 0006, bug 6 |
 
 Plus the silent wrong output on invalid input (spec 0008, annex A9–A13b),
 and a `no_std` build that never compiled (spec 0004).
@@ -149,9 +153,15 @@ A **mutation generator** derives inputs from valid streams:
 
 The expected outcome is always `oracle_decode(mutated)`: specific bytes
 or a specific error class. Until the strict decoder exists, the current
-decoders are only checked to be **memory-safe** on these inputs (no
-panic, no canary damage). Equality with the oracle is enabled when the
-strict decoder lands.
+SIMD decoders are only checked to be **memory-safe** on these inputs: a
+panic is caught and counted (with overflow checks on, the scalar decoder
+panics on invalid characters, annex A11), while memory corruption aborts
+the test process and so cannot be missed. Equality with the oracle, and
+the absence of panics, are enforced when the strict decoder lands.
+
+Legacy streams are enforced from the start: every decoder must match the
+upstream reference on mutated legacy streams, junk included (spec 0008
+annex A15).
 
 ### 5 — Property tests
 
@@ -285,10 +295,28 @@ run locally.
 | 0006 bug 2 | `scalar_decoder_chunk_size_1` | abort / debug-assert panic |
 | 0006 bug 3 | `simd_wrap_payload_fills_last_line` (n = 26, W = 32; n = 52, W = 64), CLI `simd_roundtrip_52` | wrong output |
 | 0006 bug 4 | `simd_streaming_encoder_empty` | `-` instead of empty |
+| 0006 bug 5 | `legacy_decoder_chunk_size_1` | panic |
+| 0006 bug 6 | `io_reader_lone_newline_read`, `io_reader_one_byte_reads`, CLI `decode_from_slow_pipe` | truncated output |
 | 0008 A9–A13b | `strict_decoder_*` (one per annex item) | wrong output without error |
 | 0004 | `rust-nostd*` builds | build failure |
 
 The regression inputs also go into the fuzz corpus (§6).
+
+Implementation notes (phase 2):
+
+- The library-level tests live in `rust/base91/tests/regressions.rs`,
+  each `#[ignore = "fixed by spec 000x …"]`; every one was checked to fail
+  on 0.2.2 (`--ignored --exact`). The CLI ones (`simd_roundtrip_16000`,
+  `simd_roundtrip_52`, `decode_from_slow_pipe`) come with the §9 CLI suite
+  in phase 3.
+- The `strict_decoder_*` tests (spec 0008 annex A9–A13b) are written with
+  the strict-decoder spec: they depend on its error API, which does not
+  exist yet. Until then, `pending::SimdStrictDecoding` covers them in the
+  §4 and §5 tests.
+- §3's decode of the invalid payload lengths and classification after
+  leading whitespace also depend on the strict decoder. Until then they are
+  exercised for memory safety only, through §4's mutations (truncation at
+  every position of short streams, leading whitespace).
 
 ### 13 — Order of work
 

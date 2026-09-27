@@ -5,7 +5,11 @@
 { pkgs ? import (fetchTarball {
     url    = "https://github.com/NixOS/nixpkgs/archive/23d72dabcb3b12469f57b37170fcbc1789bd7457.tar.gz";
     sha256 = "sha256-z5NJPSBwsLf/OfD8WTmh79tlSU8XgIbwmk6qB1/TFzY=";
-  }) {} }:
+  }) {}
+  # Seed for the randomized tests (spec 0009). CI passes the commit hash, so
+  # reruns of a commit test the same cases; null keeps the suite's default.
+, testSeed ? null
+}:
 
 let
   # ---------------------------------------------------------------------------
@@ -79,10 +83,29 @@ let
     cargoClippyExtraArgs = "${referenceTestsFeature} -- --deny warnings";
   });
 
-  rustTests = crane.cargoTest (rustCommon // {
+  # Tests run optimized (crane's release profile) but with debug assertions
+  # and overflow checks on: the codec's debug_assert! bounds checks turn an
+  # out-of-bounds write into a panic instead of silent memory corruption
+  # (spec 0009 §7).
+  testEnv = {
+    CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS = "true";
+    CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS  = "true";
+  } // pkgs.lib.optionalAttrs (testSeed != null) {
+    BASE91_TEST_SEED = testSeed;
+  };
+
+  rustTests = crane.cargoTest (rustCommon // testEnv // {
     pname              = "base91-tests";
     cargoArtifacts     = rustDeps;
     cargoTestExtraArgs = referenceTestsFeature;
+  });
+
+  # The full differential matrix and property runs (spec 0009 §2, §11).
+  rustTestsFull = crane.cargoTest (rustCommon // testEnv // {
+    pname              = "base91-tests-full";
+    cargoArtifacts     = rustDeps;
+    cargoTestExtraArgs = "-p base91-rs ${referenceTestsFeature} --test matrix --test invalid_input --test properties";
+    BASE91_TEST_FULL   = "1";
   });
 
   # ---------------------------------------------------------------------------
@@ -335,5 +358,6 @@ in
   rust-fmt      = rustFmt;
   rust-clippy   = rustClippy;
   rust-tests    = rustTests;
+  rust-tests-full = rustTestsFull;
   go-tests      = goTests;
 }

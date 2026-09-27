@@ -38,6 +38,12 @@ jobs:
       - name: cargo clippy
         run: nix-build default.nix -A rust-clippy
 
+      # The seed of the randomized tests derives from the commit (spec 0009),
+      # so a rerun of this commit tests the same cases.
       - name: cargo test
-        run: nix-build default.nix -A rust-tests
+        run: nix-build default.nix -A rust-tests --argstr testSeed "${{ github.sha }}"
+
+      - name: cargo test (full matrix)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: nix-build default.nix -A rust-tests-full --argstr testSeed "${{ github.sha }}"
 

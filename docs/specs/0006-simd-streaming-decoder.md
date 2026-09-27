@@ -4,7 +4,7 @@ SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 SPDX-License-Identifier: MIT
 -->
 
-# 0006 — Fix SIMD streaming and wrapping corruption (and a `ScalarDecoder` heap overflow)
+# 0006 — Fix SIMD streaming and wrapping corruption, two decoder buffer overruns, and early EOF in `io::DecoderReader`
 
 **Status:** draft
 **App:** base91
@@ -13,9 +13,10 @@ SPDX-License-Identifier: MIT
 ## Problem
 
 Four bugs in the SIMD variant, all in 0.2.2 (the SIMD variant first
-shipped in 0.2.2). Bugs 1 and 2 were found while writing spec 0007; bugs 3
-and 4 while writing spec 0008, which defines the target format these
-fixes conform to.
+shipped in 0.2.2), and two in every release since 0.2.0: the legacy
+streaming decoder and `io::DecoderReader`. Bugs 1 and 2 were found while
+writing spec 0007; bugs 3 and 4 while writing spec 0008, which defines the
+target format these fixes conform to; bugs 5 and 6 by the spec 0009 tests.
 
 ### Bug 1 — `simd::Decoder` loses state at chunk boundaries (silent data corruption)
 
@@ -118,6 +119,51 @@ the empty stream. That breaks chunking invariance (spec 0008 §3.6). It is
 harmless for decoding (`-` decodes to empty), but the two encoders must
 agree.
 
+### Bug 5 — The legacy streaming decoder panics on small chunks
+
+Same class as bug 2, in the **legacy** codec. `Decoder::decode`
+(`codec.rs:191`) reserves `decode_size_hint(input.len())` =
+⌊7k/8⌋ + 1 bytes for k input characters, but a character pending from the
+previous call completes one more pair. Each pair carries 13 or 14 bits,
+and up to 7 bits are already queued, so k characters plus a pending one
+can need more bytes than reserved (e.g. k = 1: one pair, up to 2 bytes,
+1 reserved). Here the write is bounds-checked (`spare[n]`), so the result
+is a **panic**, not memory corruption.
+
+- Found by the spec 0009 matrix (`legacy::streaming_matches_reference`,
+  1-byte chunks): `index out of bounds: the len is 1 but the index is 1`
+  at `codec.rs:224`.
+- **Python:** `pybase91.Decoder().update()` fed 1-byte chunks raises
+  `PanicException` (checked with the 0.2.2 package; 3-, 5- and 7-byte
+  chunks happened to pass, since the overflow only triggers when the
+  `Vec` has no spare capacity left).
+- Present since the performance commit `127a49d`, i.e. in 0.2.0, 0.2.1
+  and 0.2.2, on crates.io **and PyPI**.
+
+### Bug 6 — `io::DecoderReader` reports end of file too early (silent truncation)
+
+`DecoderReader::read` (`io.rs:137`) reads one chunk from the inner reader,
+decodes it, and returns what was decoded. When a chunk decodes to **zero
+bytes**, it returns `Ok(0)`, which the `Read` contract defines as end of
+file. The caller stops; `finish` never runs, so a byte still held in the
+decoder is lost; and nothing after that chunk is read.
+
+A chunk decodes to nothing whenever it holds fewer than two alphabet
+characters: a lone newline, a lone character, junk. From a slice this only
+happens at the very end, but **a pipe returns whatever has arrived**, so it
+can happen anywhere. Affects both formats (the reader auto-detects).
+
+- Found by the spec 0009 invalid-input test (`mutated_legacy_streams`: a
+  1-byte legacy stream whose first character became junk decodes to
+  nothing through the reader, one byte through `simd::decode`).
+- **CLI:** `base91 -d` reads through `DecoderReader`. Reproduced with the
+  encoding of `hello, world` written to a pipe in three parts with pauses,
+  the middle part a lone newline: the output is `hello,` and the rest is
+  **silently dropped** (exit status 0). The same input written at once
+  decodes fully.
+- Present since the first Rust port (`97ede57`): `base91-rs` and
+  `base91-cli` 0.2.0–0.2.2. `pybase91` does not use `io`.
+
 ### Not affected (checked)
 
 - `simd::Encoder` (streaming, no wrapping): for non-empty input, chunks of
@@ -131,9 +177,9 @@ agree.
   (at most 12): 2·⌊(8k+12)/13⌋ ≤ (16k+24)/13 < (16k+26)/13.
 - The CLI encode path (`base91 --simd`) uses the one-shot `simd::encode`
   (`base91-cli/src/main.rs:249`).
-- `pybase91`: its functions and classes use the Henke codec only
-  (`crate::encode` / `decode` / `Encoder` / `Decoder`, `python.rs`), never
-  `simd`.
+- `pybase91` and bugs 1–4: its functions and classes use the legacy codec
+  only (`crate::encode` / `decode` / `Encoder` / `Decoder`, `python.rs`),
+  never `simd`. (It *is* affected by bug 5.)
 
 ### Exposure
 
@@ -147,7 +193,12 @@ agree.
     input whose size is a multiple of 52 bytes (default `wrap = 64`), and,
     with `-w W`, whenever the payload length is a multiple of W. Such files
     are on users' disks. They can be repaired (see bug 3).
-- `pybase91` is not affected.
+- Bug 5: `base91-rs` 0.2.0–0.2.2 and **`pybase91` 0.2.0–0.2.2**. A crash
+  (panic / `PanicException`) on streaming decode with very small chunks;
+  no wrong data is returned.
+- Bug 6: `base91-rs` and `base91-cli` 0.2.0–0.2.2. `base91 -d` (both
+  formats) and `io::DecoderReader` users can silently get **truncated**
+  output when their input arrives in pieces (pipes, sockets).
 
 ## Goals
 
@@ -157,13 +208,16 @@ agree.
 - `io::DecoderReader` and the CLI round-trip SIMD streams of any size.
 - `ScalarDecoder::decode` never writes outside its reservation, for any
   chunking.
+- The legacy `Decoder::decode` never panics, for any chunking.
+- `io::DecoderReader` returns end of file only at the real end of its
+  input, whatever sizes the inner reader's reads have.
 - Wrapped encoding produces exactly the layout of spec 0008 §3.4, with
   length E(n, W), for every n and W.
 - An empty input gives the empty stream, whether encoded one-shot or
   streaming.
 - The one-shot decoder's performance is unchanged (this is a patch
   release).
-- Tests that would have caught all four bugs, and that keep the streaming
+- Tests that would have caught all six bugs, and that keep the streaming
   and one-shot paths equivalent from now on.
 
 ## Non-goals
@@ -266,6 +320,40 @@ with an empty output.
 
 (`simd::Encoder` has no wrapping support today; that is unchanged here.)
 
+### 5b — Legacy decoder: correct reservation (bug 5)
+
+`Decoder::decode` in `codec.rs` reserves
+`decode_size_hint(input.len() + 1)` instead of
+`decode_size_hint(input.len())`.
+
+Bound: after draining, at most 7 bits stay queued, and each pair adds 13
+or 14 bits. k input characters plus one pending character complete at most
+p = ⌊(k+1)/2⌋ pairs, so they produce at most
+⌊(7 + 14p)/8⌋ ≤ ⌊(7k + 14)/8⌋ bytes, and
+`decode_size_hint(k + 1)` = ⌊7(k+1)/8⌋ + 1 = ⌊(7k + 15)/8⌋ covers it.
+
+The bounds-checked `spare[n]` writes stay as they are: after this fix they
+cannot fail, and if a future change breaks the bound, a panic is the
+right failure mode.
+
+### 5c — `io::DecoderReader`: no early end of file (bug 6)
+
+`read` keeps pulling chunks until it has at least one decoded byte to
+return, or the inner reader is exhausted:
+
+```text
+loop:
+    if decoded bytes are buffered: copy them out, return that count (> 0)
+    if done:                       return Ok(0)        <- the only EOF
+    n = inner.read(read_buf)
+    if n == 0: decoder.finish(decoded); done = true
+    else:      decoder.decode(read_buf[..n], decoded)
+```
+
+`Ok(0)` is returned only after the inner reader reported end of file and
+`finish` ran. `Interrupted` errors from the inner reader are retried, as
+`Read` implementations conventionally do; other errors are returned.
+
 ### 6 — Tests
 
 - **`ScalarDecoder` chunking** (unit, `simd/scalar.rs`): payload lengths
@@ -291,6 +379,16 @@ with an empty output.
 
   Named regression tests for n = 26 with W = 32, and n = 52 with W = 64
   (the CLI default). Both are corrupt on 0.2.2.
+- **Legacy streaming decoder** (bug 5): the spec 0009 matrix
+  (`legacy::streaming_matches_reference`, every chunk size including 1)
+  against the upstream reference, plus a named regression test with 1-byte
+  chunks. On the Python side, a `pybase91` test feeding
+  `Decoder.update()` one byte at a time.
+- **`io::DecoderReader`** (bug 6): an inner reader returning 1 byte per
+  read, and one returning a lone LF as its own read, for both formats;
+  output equals the one-shot decode. The spec 0009 matrix gets the same
+  chunked inner reader for its `io` tests. CLI: the three-part pipe of
+  bug 6 decodes completely.
 - **Streaming encoder**: `encode(b"")` + `finish` gives the empty stream;
   empty chunks interleaved with non-empty ones do not change the output.
 - **`io::DecoderReader`**: add SIMD-stream variants of
@@ -324,7 +422,13 @@ baseline:
       a multiple of 52 bytes (default wrap), or generally whenever the
       payload filled its last line", with the repair recipe (delete the
       character between `-` and the first newline);
-    - bug 4: the empty streaming case.
+    - bug 4: the empty streaming case;
+    - bug 5: "the streaming decoder (Rust `Decoder`, Python
+      `pybase91.Decoder`) could panic when fed very small chunks", also in
+      the `pybase91` release notes;
+    - bug 6: "`base91 -d` and `io::DecoderReader` could stop early and
+      silently drop the rest of the input when it arrived in pieces (e.g.
+      from a pipe)".
   - `Security`: bug 2, next to spec 0005's entry.
 - Ship in 0.2.3 with specs 0004 and 0005 (see spec 0004 §8).
 - Disclosure: covered by the same advisory as spec 0005 (bug 2 is also

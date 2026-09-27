@@ -9,9 +9,19 @@
 //! - `reference` (feature `reference`): the vendored, unmodified upstream
 //!   basE91 0.6.0 C implementation, the oracle for the legacy format.
 //!
+//! And the shared helpers of the differential tests (spec 0009 §2–§4):
+//! [`pending`] (known deviations), [`rng`] (reproducible randomness),
+//! [`canary`] (guarded output buffers), [`mutate`] (damaged streams),
+//! [`reader`] (reads in chosen pieces, like a pipe).
+//!
 //! This crate is a dev-dependency only; it is never published.
 
+pub mod canary;
+pub mod mutate;
 pub mod oracle;
+pub mod pending;
+pub mod reader;
+pub mod rng;
 
 #[cfg(feature = "reference")]
 pub mod reference;
