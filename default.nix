@@ -49,6 +49,7 @@ let
       || builtins.match ".*/base91-testkit/reference(/.*)?" path != null
       || builtins.match ".*/base91/fuzz/corpus(/.*)?" path != null
       || builtins.match ".*/base91/python-tests(/.*)?" path != null
+      || builtins.match ".*/base91/pybase91\\.pyi(\\.license)?" path != null
       || builtins.match ".*/README\\.md$" path != null;
   };
 
@@ -433,6 +434,19 @@ let
 
     maturinBuildFlags = [ "--features" "python" ];
 
+    # The type stub is committed (maturin ships it in the wheel, with
+    # py.typed). Regenerate it and fail if it differs from the committed one,
+    # so a stale stub can never be built or released.
+    preBuild = ''
+      cp base91/pybase91.pyi "$TMPDIR/pybase91.pyi.committed"
+      cargo run --offline --locked -p base91-rs --bin post_build --features python
+      if ! diff -u "$TMPDIR/pybase91.pyi.committed" base91/pybase91.pyi; then
+        echo "error: rust/base91/pybase91.pyi is stale. Regenerate it with" >&2
+        echo "  (cd rust && cargo run -p base91-rs --bin post_build --features python)" >&2
+        echo "and commit the result." >&2
+        exit 1
+      fi
+    '';
 
     # Importing the package loads the compiled extension: fails if the wheel
     # has none, which maturin produces silently when it misdetects the

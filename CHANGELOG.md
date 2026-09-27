@@ -72,6 +72,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `alloc` feature (implied by `std`): the `Vec`-based API under `no_std`.
   Without it, the crate exposes the size hints, the Henke `*_unchecked`
   functions and `simd::detect()`.
+- `pybase91` ships type stubs (`__init__.pyi`, `py.typed`), so type
+  checkers see its API.
 
 ### Changed
 

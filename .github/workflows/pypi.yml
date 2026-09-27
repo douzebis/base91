@@ -48,13 +48,15 @@ jobs:
       # Every wheel must contain the compiled extension module (spec 0004
       # §7): if maturin misdetects the bindings it silently builds a "bin"
       # wheel without it.
-      - name: Check wheels contain the extension module
+      - name: Check wheels contain the extension module and its type stub
         shell: bash
         working-directory: rust/base91
         run: |
           for wheel in dist/*.whl; do
             python -c "import sys, zipfile; names = zipfile.ZipFile(sys.argv[1]).namelist(); sys.exit(0 if any(n.startswith('pybase91/pybase91') and n.endswith(('.so', '.pyd')) for n in names) else 1)" "$wheel" \
               || { echo "no extension module in $wheel"; exit 1; }
+            python -c "import sys, zipfile; names = set(zipfile.ZipFile(sys.argv[1]).namelist()); sys.exit(0 if {'pybase91/__init__.pyi', 'pybase91/py.typed'} <= names else 1)" "$wheel" \
+              || { echo "no type stub in $wheel"; exit 1; }
           done
 
       - uses: actions/upload-artifact@v7

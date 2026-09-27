@@ -8,9 +8,6 @@
 # Rust build artifacts
 rust/target/
 
-# Generated files (produced by `cargo run --bin post_build --features python`)
-rust/base91/pybase91.pyi
-
 # cargo-fuzz working directories (spec 0009 §6); the corpus is committed
 rust/base91/fuzz/artifacts/
 rust/base91/fuzz/coverage/
