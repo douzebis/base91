@@ -4,28 +4,74 @@ SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 SPDX-License-Identifier: MIT
 -->
 
-# 0011 — SIMD kernel performance investigation (embryo)
+# 0011 — SIMD kernel performance: validation cost, wrapping overhead, robust code generation
 
-**Status:** embryo (placeholder to track an open question; not ready for
-implementation)
+**Status:** draft
 **App:** base91
 **Implemented in:** —
 
-## Why this exists
+Follows spec 0010 (driver rewrite, 0.3.0), which left two performance
+targets unmet and found the kernels' speed fragile under the compiler.
+Kernel-internal work only: no API or format change.
 
-Measurements made while implementing spec 0009 show that the SIMD kernels
-fall short of their own targets, and that AVX2 barely improves on SSE4.1.
-This is a separate question from the driver-layer rewrite (spec 0010), so
-it is kept apart. This embryo records the facts so far and what to
-investigate; it becomes a real spec once someone takes it up.
+## Problem
 
-## Facts so far
+Measured on a performance core with the 0.3.0 driver (see *Measurement
+protocol*, §1), strict checks included:
 
-**Superseded (2026-09-28).** The table below was measured without CPU
-pinning on a hybrid laptop chip (Intel Core Ultra 7 165U) in a VM, so on
-performance and efficiency cores alike. Efficiency cores execute 256-bit
-AVX2 as two 128-bit halves, which is why AVX2 seemed to buy nothing. Re-
-measured on a performance core, with the 0.3.0 driver (spec 0010;
+1. **Validation is expensive.** Spec 0008 §3.5 says error detection SHOULD
+   cost at most 3 % of decode throughput. It costs +22 % (SSE4.1), +16.5 %
+   (AVX2) and +29.5 % (AVX2, wrapped at 64 columns), measured against a
+   build with the checks removed (spec 0010, decision 7). Every part of the
+   check (the unsigned range test, the `'` test, the 8191 test) costs
+   several percent, out of proportion to the handful of vector operations
+   involved.
+2. **Wrapping is not free.** Spec 0010 §4 targets wrapped throughput within
+   10 % of unwrapped. On a performance core, 1 MiB, AVX2: decode +14 %
+   (168–170 µs against 147–149 µs), encode +16 % (138–140 µs against
+   119–120 µs).
+3. **The kernels' speed depends on the code around them.** The loop that
+   drives a block kernel changes how the compiler allocates registers: the
+   same construct was the fastest for one kernel and twice as slow for the
+   other (see *Background*). The driver works around it with per-kernel
+   special cases chosen by measurement (a flat loop for AVX2, an
+   out-of-line call per line for SSE4.1), tuned to today's compiler.
+   `perf_sanity` (spec 0010, stage 3) detects large regressions of this
+   kind, but nothing prevents them.
+
+## Goals
+
+- **G1 — Validation cost:** at most 3 % of decode throughput (spec 0008
+  §3.5), SSE4.1 and AVX2, unwrapped and wrapped, on a performance core. If
+  the best formulation cannot reach it, the lowest cost reached, with the
+  evidence (open question 1).
+- **G2 — Wrapping overhead:** wrapped (W = 64) within 10 % of unwrapped,
+  encode and decode, SSE4.1 and AVX2.
+- **G3 — Robust code generation:** one loop structure for the three SIMD
+  kernels (SSE4.1, AVX2, NEON), no per-kernel special case, and each
+  code path's speed insensitive to the loop around it: the three loop
+  shapes of *Background* within 5 % of each other, for SSE4.1, AVX2 and
+  the scalar path (NEON: not measurable, see *Non-goals*).
+- **G4 — No regression:** every figure of spec 0010's performance-core
+  table (*Stage 1 results*) at least as fast, within noise (2 %).
+
+## Non-goals
+
+- AVX-512 or SVE2 kernels (spec 0008 §3.4 defers them).
+- **NEON speed.** No aarch64 hardware is available, and qemu timings are
+  meaningless. NEON receives the same changes as the x86 kernels, for
+  symmetry (decision 2); its correctness stays tested under qemu.
+- The driver's API and the wire format (specs 0008, 0010).
+- Hand-written assembly: a decision gate at the end of this spec (§6)
+  says whether a follow-up spec is needed.
+
+## Background
+
+**Resolved questions of the embryo** (2026-09-28). The embryo asked whether
+AVX2 is worth keeping and whether spec 0002's targets (encode ≥ 5 GB/s,
+decode ≥ 3.5 GB/s) are reachable. Its evidence came from unpinned runs on a
+hybrid laptop chip in a VM, mostly on efficiency cores, which run 256-bit
+AVX2 as two 128-bit halves. Re-measured on a performance core (0.3.0,
 `perf_sanity`, 512 KiB, fastest of 51 runs, three runs):
 
 | Level | encode (MB/s) | decode (MB/s) |
@@ -34,62 +80,41 @@ measured on a performance core, with the 0.3.0 driver (spec 0010;
 | Simd128 (SSE4.1) | 5123–5232 | 5795–5904 |
 | Simd256 (AVX2) | 9293–9880 | 7747–7763 |
 
-- **AVX2 vs SSE4.1:** ×1.81–1.89 on encode, ×1.31–1.34 on decode. AVX2
-  earns its keep (question 4 below).
-- **Spec 0002's targets** (encode ≥ 5 GB/s, decode ≥ 3.5 GB/s, AVX2) are
-  met at this cache-resident size (question 3 below); at sizes beyond the
-  L2 cache, memory bandwidth takes over.
-- On an efficiency core, AVX2 over SSE4.1 is about ×1.1 (decode).
+AVX2 is ×1.81–1.89 faster than SSE4.1 on encode, ×1.31–1.34 on decode,
+and the targets are met at this cache-resident size. Both questions are
+closed. (The 0.2.2 measurement that raised them: AVX2 ×0.87–1.06 of SSE4.1,
+encode about 2.4 GB/s; unpinned.)
 
-The original measurement, for the record (dev machine, 2026-09-27, 0.2.2,
-4 MiB of random data, unwrapped SIMD streams, `tests/perf_sanity.rs`
-median of 7 runs, three runs, **unpinned**):
+**Code paths.** Three SIMD kernels, each an encode and a decode block
+function written with intrinsics: SSE4.1 and AVX2 (x86-64), NEON
+(aarch64). A fourth path, the scalar level, is plain Rust, for CPUs with
+none of them; it is not a SIMD kernel, but the compiler's code generation
+affects it too.
 
-| Level | encode (MB/s) | decode (MB/s) |
-|---|---|---|
-| Scalar | ~1 020 | ~1 110 |
-| Simd128 (SSE4.1) | ~2 390 | ~3 100 |
-| Simd256 (AVX2) | 2 090–2 520 | ~3 370 |
+**Loop shapes.** A block kernel processes one block (16 characters ↔ 13
+bytes; 32 ↔ 26 for AVX2). The driver hands it batches of several lines of
+several blocks, and some loop calls it on each block, skipping the
+terminator at each line end. A *loop shape* is how that loop is written;
+the three measured compute exactly the same thing:
 
-- **AVX2 vs SSE4.1:** ×0.87–1.06 on encode (×1.45 once, in the Nix
-  sandbox), ×1.07–1.10 on decode. Twice the vector width buys almost
-  nothing.
-- **Targets of spec 0002** (single thread, AVX2): encode ≥ 5 GB/s, decode
-  ≥ 3.5 GB/s, with 4–7 GB/s estimated. Measured: about 2.4 GB/s encode
-  (half the target), about 3.4 GB/s decode (just under).
-- The kernels themselves are correct: the spec 0009 matrix checks them
-  against the oracle on x86_64 (SSE4.1, AVX2) and on aarch64 (NEON, under
-  qemu).
-- Not measured yet: aarch64 NEON on real hardware (qemu timings are
-  meaningless).
+```rust
+// (a) flat: one loop over every block of the batch
+for _ in 0..lines * blocks_per_line {
+    bad |= kernel(src, dst);
+    src += 16; dst += 13;
+    if end_of_line { src += terminator_len; }
+}
 
-## Questions to investigate
+// (b) out of line: one call per line to a function kept out of line
+//     (#[inline(never)]), itself a plain loop over the line's blocks
+for l in 0..lines { ok &= decode_line(src_of(l), dst_of(l), blocks_per_line); }
 
-1. **Where the time goes.** Profile the kernels (e.g. `samply`, already in
-   the dev shell; `perf`; `llvm-mca` on the kernel loops) rather than
-   guess.
-2. **Candidate causes, to confirm or rule out:**
-   - ~~the per-block call through a function pointer in
-     `x86::encode_loop` / `decode_loop`~~: gone with the spec 0010 driver,
-     which calls batch functions (`encode_lines_*`, `decode_lines_*`)
-     whose block kernels are inlined;
-   - the padding copy for the last block of a batch (now in
-     `driver::encode_blocks`);
-   - cross-lane shuffles or port pressure specific to the AVX2 kernels;
-   - memory bandwidth, e.g. whether 4 MiB fits the machine's caches.
-3. **Whether the targets are realistic.** Are spec 0002's 5 / 3.5 GB/s
-   reachable with this format, or should they be revised, with evidence?
-4. **Is AVX2 worth keeping** if it cannot beat SSE4.1 meaningfully? (It
-   adds code, tests and a dispatch path.)
+// (c) nested: the loop of (b), inlined
+for l in 0..lines { for i in 0..blocks_per_line { bad |= kernel(block(l, i), out(l, i)); } }
+```
 
-## Code-generation sensitivity (found in spec 0010, stage 1, 2026-09-28)
-
-**Fact.** How fast a kernel loop runs depends heavily on the shape of the
-Rust code around it, because that shape steers the compiler's register
-allocation and inlining. Measured while writing the spec 0010 driver
-(1 MiB, rustc from the pinned nixpkgs, on an **efficiency core**; the
-generated code does not depend on the core, but the size of the effect
-does, and should be re-measured on a performance core):
+**Code-generation sensitivity** (found in spec 0010, stage 1, on an
+**efficiency core**; to be re-measured on a performance core, §2):
 
 | Loop around the block kernel | SSE4.1 decode | AVX2 decode |
 |---|---|---|
@@ -97,102 +122,169 @@ does, and should be re-measured on a performance core):
 | a plain loop per line, out of line (`#[inline(never)]`) | 273 µs | 253 µs |
 | nested loops (lines × blocks), inlined | 267 µs | 305 µs |
 
-The same source construct is the fastest for one kernel and twice as slow
-for the other; the ranking of the others differs too. `perf` shows the cause on the slow AVX2 variant: the
-kernel's dozen constants stay live across iterations, and the compiler
-rotates them through registers on every block (a chain of
-`vmovdqa ymmA, ymmB` among the hottest instructions), plus a reload.
+`perf` shows the cause on the slow AVX2 variant: the kernel's dozen
+constants stay live across iterations, and the compiler rotates them
+through registers on every block (a chain of `vmovdqa ymmA, ymmB` among
+the hottest instructions), plus a reload. The scalar decoder showed the
+same class of problem: a block function returning its bytes through memory
+(40 % of the time), then a validation loop auto-vectorized into about
+1 000 SSE2 instructions per block; handling one pair at a time fixed both.
 
-The scalar decoder showed the same class of problem twice: a block
-function that was not inlined returned its bytes through memory (40 % of
-the time), and once inlined, its per-character validation loop over an
-array was auto-vectorized into SSE2 of about 1 000 instructions per
-block. Handling one pair at a time, straight into the output, fixed both
-(853 µs, against 905 µs in 0.2.3).
+Intrinsics choose instructions; register allocation, scheduling and
+inlining stay the compiler's. Three ways to deal with it, from least to
+most control: (1) shape the kernels so the allocator has no reason to
+misbehave; (2) hand-written assembly (`core::arch::asm!`), immune to the
+compiler but maintained by hand; (3) detect regressions (`perf_sanity`,
+done in spec 0010). This spec does (1), with a gate for (2) (§6).
 
-**What the driver does today** (per kernel, chosen by measurement, and
-commented in the code): a flat loop for AVX2, one out-of-line call per
-line for SSE4.1, pair-at-a-time for the scalar decoder. This is tuned to
-today's compiler; another compiler version may reorder the ranking.
+## Specification
 
-**The risk is speed only.** The output and the errors never depend on it;
-the tests check them at every level.
+### 1 — Measurement protocol
 
-**Exposure.** Our builds pin nixpkgs, so the compiler changes only with a
-deliberate bump. Users building from crates.io use their own compiler.
-This sensitivity is common to all SIMD code written with intrinsics, in
-Rust or C.
+Every number in this spec, and every decision, comes from measurements
+made this way:
 
-**Register usage cannot be forced with intrinsics.** Intrinsics choose
-instructions; register allocation, scheduling and inlining stay the
-compiler's. Options, from least to most control:
+- On a **performance core**: in the dev VM, `taskset -c 8` (host CPU 0),
+  with vCPU 9 (its hyperthread sibling) idle. Numbers from other cores are
+  labeled.
+- **Nothing else runs**: every binary is built before measuring, and no
+  build, test or Nix job runs until the measurement ends.
+- **A/B comparisons alternate** over three rounds; results are reported
+  as lowest–highest, not as a single figure.
+- `criterion` (`benches/throughput.rs`, 1 MiB) for absolute numbers;
+  `perf_sanity` for ratios; `perf record` / `perf annotate` for where the
+  time goes; `llvm-mca` on the kernel loops for port pressure, when the
+  profile alone does not explain a difference.
+- A variant under study (a validation formulation, a loop shape) is a
+  temporary patch in a separate worktree, built before measuring, then
+  discarded; only the chosen variant is committed.
 
-1. **Shape the kernels so the allocator has no reason to misbehave**
-   (influences, does not guarantee): fewer live constants (derive some
-   from others, read rarely used ones from memory, which costs a load
-   that is almost free), constants loaded once per batch and passed
-   explicitly, a loop unrolled by two blocks, the same loop shape for
-   every kernel. Usually stable across compiler versions, but not
-   promised.
-2. **Hand-written assembly** for the hot loops (`core::arch::asm!`,
-   stable Rust): the only way to force registers and instructions, and
-   immune to compiler versions. Used for this reason by ring and dav1d.
-   Costs: three loops maintained by hand (SSE4.1, AVX2, NEON; about 60 to
-   100 instructions each, the driver staying in Rust), harder review,
-   fully `unsafe`, no optimization across the boundary. The existing
-   tests (oracle matrix, kernel validation tests, fuzzing, NEON under
-   qemu) would cover it as they cover the intrinsics.
-3. **Detect instead of prevent:** `tests/perf_sanity.rs` ratios in CI
-   (`rust-perf`), machine-independent, that fail on this class of
-   regression: wrapped against unwrapped decode, AVX2 against SSE4.1
-   decode (AVX2 must not be slower), SIMD against scalar decode.
+### 2 — Baseline
 
-**Recommendation.** Option 3 in spec 0010 (stage 3 re-calibrates
-`perf_sanity` anyway), option 1 here, and option 2 kept in reserve: only
-if the CI guard trips on a nixpkgs bump despite option 1. Assembly buys
-certainty at a real maintenance cost; so far the sensitivity has been
-seen on loops that option 1 restructures anyway. Once option 1 is done,
-the per-kernel special cases above should go.
+Before any change, on a performance core:
 
-**Option 3, as implemented (spec 0010, stage 3).** `perf_sanity` guards
-the three ratios above, calibrated on a performance core at 70 % of the
-lowest of three runs (the AVX2 / SSE4.1 thresholds capped at 0.90, for
-machines with half-width AVX2). Its first calibration, on an efficiency
-core with 4 MiB inputs and the median of 7 runs, was too noisy to guard
-anything finer than "twice as slow" (AVX2 over SSE4.1 decode ranged from
-0.89 to 1.23). Measuring on a performance core, at a cache-resident size
-(512 KiB), with the fastest of 51 runs and no allocation in the timed
-region, brought the run-to-run spread of every ratio down to a few
-hundredths; the thresholds then catch a regression that moves a ratio by
-about a third. Tighter margins would need the same conditions on every
-machine that runs the guard, which CI runners do not offer.
+- the loop-shape table of *Background*, for SSE4.1 and AVX2 decode and
+  encode, the three shapes each;
+- the validation cost split into its parts (range check, `'` test, 8191
+  test), unwrapped and wrapped;
+- the wrapping overhead, with a profile of where the extra time goes
+  (terminator checks, per-line loop, kernel restarts).
 
-**Targets left over from spec 0010** (both kernel-loop work):
-- Wrapped within 10 % of unwrapped: on a performance core, +14 % on
-  decode (168–170 µs against 147–149 µs, AVX2, W = 64, 1 MiB) and +16 % on
-  encode (138–140 µs against 119–120 µs); on an efficiency core, +12 % and
-  +8 %.
-- Strict validation costing at most 3 % of decode throughput (spec 0008
-  §3.5): on a performance core, +22 % (SSE4.1), +16.5 % (AVX2) and
-  +29.5 % (AVX2, W = 64); on an efficiency core, +25 % and +29 %, every
-  part of the check costing several percent (spec 0010, decision 7). Candidate
-  formulations, to evaluate with the kernels reshaped (option 1 above):
-  running maxima instead of subtract-and-OR (one operation per block for
-  the range check and for the 8191 check, tested once per batch); the 8191
-  check on the bytes, before the multiply (a pair exceeds 8191 exactly
-  when its high index is 90 and its low index is at least 2); a
-  lookup-table classification of the alphabet (two byte shuffles), as
-  SIMD base64 decoders do.
+Recorded here, under *Results*.
 
-## Dependencies and timing
+### 3 — Kernel shape
 
-- After spec 0010: the driver rewrite changes the loops around the
-  kernels, so profiling before it would measure code about to disappear.
-- Uses the spec 0009 tooling: `rust-perf` for relative numbers (its
-  `Simd256 / Simd128` thresholds, currently 0.61 / 0.76, are to be raised
-  when this is resolved), `criterion` for absolute ones.
+The kernels are restructured so that the loop around them stops
+mattering (G3):
 
-## Non-goals (for now)
+- **Constants loaded once per batch.** Each kernel's constants (shuffle
+  masks, multipliers, bounds) are built into a struct at the start of a
+  batch function and passed by reference to the block function, instead
+  of being materialized inside it. Constants used once per block and
+  cheap to reload from memory may stay memory operands, to relieve
+  register pressure.
+- **Unrolled by two blocks**, with independent dependency chains.
+- **The same loop structure** for SSE4.1, AVX2 and NEON; the driver's
+  per-kernel special cases (`decode_line_sse41` out of line, the flat
+  AVX2 loop) are replaced by that single structure.
 
-- AVX-512 or SVE2 kernels (spec 0008 §3.4 defers them).
-- Anything in the driver layer (spec 0010).
+G3 is checked by re-measuring the three loop shapes of §2 with the new
+kernels: within 5 % of each other, for every kernel.
+
+### 4 — Validation formulations
+
+With the kernels reshaped (§3), candidate formulations are measured
+against the current one and the unchecked build:
+
+- **Running maxima:** `max_epu8` of the indices and `max_epu16` of the
+  pair values accumulated per batch, compared once per batch against 90
+  and 8191 (one operation per block for each check, instead of
+  subtract-and-OR).
+- **The 8191 test on bytes**, before the multiply: a pair exceeds 8191
+  exactly when its high index is 90 and its low index is at least 2. It
+  removes the dependency on the multiply.
+- **Lookup-table classification** of the alphabet (two byte shuffles
+  and an AND), as SIMD base64 decoders do, covering the range test and
+  `'` at once.
+- Combinations of the above.
+
+The cheapest formulation that keeps every kernel validation test passing
+(spec 0010 §7) is kept, per kernel if they differ. G1 is checked with the
+protocol of §1; if no formulation reaches 3 %, open question 1 decides.
+
+### 5 — Wrapping overhead
+
+Driven by the §2 profile. Candidates, to measure:
+
+- terminator checks for a whole batch of lines ahead of the kernel call
+  (they are already one comparison per line; the question is the branch
+  and the loop around them);
+- one kernel call per batch of lines with the line stride inside the
+  reshaped loop of §3 (no restart per line);
+- on the encode side, writing the LF of each line inside the kernel loop
+  rather than in a second loop over the lines.
+
+G2 is checked with the protocol of §1.
+
+### 6 — Assembly gate
+
+At the end of this spec, if G1 or G3 is not met, or if a nixpkgs bump
+trips `perf_sanity` on this kind of regression, a follow-up spec proposes
+hand-written assembly for the hot loops (Background, option 2), with its
+maintenance cost. Otherwise, assembly is not pursued.
+
+### 7 — Tests
+
+- The kernel validation tests (every byte outside the alphabet at every
+  position; pairs 8192–8280), the driver-against-oracle tests, the matrix,
+  fuzzing and NEON under qemu must pass unchanged: this spec changes no
+  behavior.
+- `perf_sanity` re-calibrated at the end (spec 0009, decision 6), its
+  thresholds raised where the new ratios allow.
+
+### 8 — Release
+
+`base91-rs` 0.3.1: internal changes only. CHANGELOG `Performance` entry
+with the measured gains. Not published before the disclosure hold is
+lifted (see the 0.2.3 and 0.3.0 releases).
+
+## Stages
+
+1. **Baseline** (§2), recorded under *Results*.
+2. **Kernel shape** (§3), with the G3 check.
+3. **Validation** (§4), with the G1 check.
+4. **Wrapping** (§5), with the G2 check.
+5. **Gate and release** (§6, §7, §8).
+
+One commit per stage, each with every check passing.
+
+## Decisions recorded (2026-09-28)
+
+1. **G3's criterion is accepted:** the three loop shapes within 5 % of
+   each other, for every measurable code path, the scalar one included.
+2. **NEON is reshaped** like the x86 kernels, so the three SIMD kernels
+   keep the same structure, although its speed cannot be measured here.
+
+## Open questions
+
+1. **If 3 % is out of reach with intrinsics:** accept the lowest cost
+   reached and relax spec 0008 §3.5's SHOULD to it, with the evidence; or
+   make it a trigger of the assembly gate (§6)? *To be discussed with the
+   stage 3 results: it depends on the size of the gap.*
+
+## Results
+
+(To be filled in at each stage.)
+
+## Verification
+
+```bash
+cd rust
+cargo test --workspace --features base91-rs/reference-tests,base91-cli/reference-tests,base91-fuzz/reference
+taskset -c 8 cargo bench -p base91-rs --bench throughput      # nothing else running
+taskset -c 8 cargo test --release -p base91-rs --test perf_sanity -- --ignored --nocapture
+nix-build ../default.nix -A rust-tests -A rust-tests-full -A rust-tests-aarch64 \
+  -A rust-nostd -A rust-clippy -A rust-fmt
+```
+
+`reuse lint` must pass.
