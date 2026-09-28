@@ -590,6 +590,67 @@ Decoding, unchanged, measured as a control: within 0.2 % on the
 efficiency core; on the performance core +5.6 % once, −0.2 % when re-run
 (the clock variation of §1). NEON is not changed yet.
 
+### Stage 3 — Validation folded into the arithmetic (2026-09-28)
+
+Validation cost with the stage 3 kernels, quick harness, unwrapped (the
+build with the checks removed, against the full checks):
+
+| Decode | performance core | efficiency core |
+|---|---|---|
+| SSE4.1 | 37.4 → 45.7 µs (+22 %) | 55.1 → 66.2 µs (+20 %) |
+| AVX2 | 26.0 → 30.5 µs (+17 %) | 50.9 → 64.5 µs (+27 %) |
+
+Its absolute cost went down (SSE4.1, performance core: about 8 µs per
+512 KiB, against about 18 µs in the baseline, 37 µs per MiB), its share
+up: the four validation operations (`'` compare, OR, two running
+maximums) stayed while the rest of the SSE4.1 kernel went from about 30
+to about 11 operations. Removing only one of the two maximums gives inconsistent
+figures (on the efficiency core, AVX2 without the value check is 5 %
+*slower*): only the total is reliable. The wrapped figures of builds
+without the index check are not measurable: the first-line probe relies on
+it to find the first terminator.
+
+**Folding the checks into the arithmetic** (one running maximum catching
+every error through the pair value) is not possible with this alphabet:
+
+- An invalid *low* character has weight 1 in `lo + 91 hi`: with a small
+  high index, the pair value stays small. Seeing it needs a second
+  weighted sum (`91 lo + hi`), which costs what the maximum it replaces
+  costs. Signed indices do not help either (a negative low index and a
+  positive high one still sum to a small positive value).
+- `'`: removing a one-character gap with one threshold maps it onto a
+  neighbor's index, whatever the formula; separating it takes a
+  non-monotonic operation (an equality test) and a merge. `psignb` fails
+  by a half-integer offset, `pabsb` reverses the order of the low range,
+  and a byte shuffle repeats every 16 values.
+
+Four operations per block is therefore the floor for exact checks; at
+about 4–5 % per operation in these issue-bound kernels, 3 % (G1) is out of
+reach. One variant was measured and dropped: OR instead of the maximum for
+the pair values (exact: a valid value never has bits 13–15 set, and values
+stay below 23 461): no change on the efficiency core, −3.3 to +2.0 % on
+the performance core. Open question 1 is to be decided with these figures.
+
+### Stage 3 — NEON (2026-09-28)
+
+The NEON kernels follow the new x86 arithmetic, with NEON's own
+instructions where they save work:
+
+- decode: pair values as `x − 165 (x >> 8)` on the 16-bit lanes of the
+  indices (one shift and one multiply-subtract; NEON has no `pmaddubsw`);
+  fields joined by shift-and-insert (`vsliq_n_u32`, 13 bits); a variable
+  shift by 0, 2, 4, 6; two table lookups and an OR;
+- encode: one table lookup gathers the bytes, a variable shift by 3, 1,
+  −1, −3 aligns every field on bits 3..28, a 16-bit variable shift and an
+  AND split them; the division by a doubling multiply-high
+  (`vqdmulhq_n_s16`, 2881) and a shift by 3; the character pairs as
+  `v + 165 hi` = `lo + 256 hi`, without a zip.
+
+The generated code (aarch64 test build) has 10 vector instructions per
+encode block and 11 plus the 4 of validation per decode block, with no
+widening. Speed not measurable here (*Non-goals*); the aarch64 library
+tests pass under qemu, and the aarch64 `no_std` build succeeds.
+
 ## Verification
 
 ```bash
