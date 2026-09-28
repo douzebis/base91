@@ -58,9 +58,9 @@ fn simd_decode_in_chunks(stream: &[u8], p: &Params) -> Vec<u8> {
     let mut decoder = simd::Decoder::new(p.level);
     let mut out = Vec::new();
     for piece in stream.chunks(p.chunk) {
-        assert!(decoder.decode(piece, &mut out));
+        decoder.decode(piece, &mut out).unwrap();
     }
-    decoder.finish(&mut out);
+    decoder.finish(&mut out).unwrap();
     out
 }
 
@@ -98,7 +98,7 @@ fn check_simd_decode(stream: &[u8], p: &Params) {
         let mut decoder = simd::Decoder::new(p.level);
         let mut single = Vec::new();
         let _ = decoder.decode(stream, &mut single);
-        decoder.finish(&mut single);
+        let _ = decoder.finish(&mut single);
         got
     };
     // With overflow checks on, the pending strict decoder panics on invalid
@@ -115,7 +115,7 @@ fn check_simd_decode(stream: &[u8], p: &Params) {
     };
     if strict {
         if let Ok(expected) = oracle::decode(stream) {
-            assert_eq!(got.as_deref(), Some(&expected[..]));
+            assert_eq!(got.as_deref(), Ok(&expected[..]));
             if !is_pending(Deviation::SimdStreamingDecoder) {
                 assert_eq!(simd_decode_in_chunks(stream, p), expected);
             }
@@ -136,7 +136,7 @@ fn check_legacy_decode(stream: &[u8], p: &Params) {
     let expected = base91_testkit::reference::decode(stream);
     assert_eq!(base91::decode(stream), expected);
     if classified_legacy(stream) {
-        assert_eq!(simd::decode(stream, p.level), Some(expected.clone()));
+        assert_eq!(simd::decode(stream, p.level), Ok(expected.clone()));
     }
     if !is_pending(Deviation::LegacyStreamingDecoder) {
         let mut decoder = base91::Decoder::new();
@@ -174,13 +174,13 @@ pub fn check_roundtrip(data: &[u8]) {
     let stream = oracle::encode(x, p.width);
     assert_eq!(stream.len(), oracle::encoded_len(x.len(), p.width));
     if p.width == 0 || !is_pending(Deviation::SimdWrappedEncoding) {
-        assert_eq!(simd::encode(x, p.level, p.width), stream);
+        assert_eq!(simd::encode(x, p.level, p.width), Ok(stream.clone()));
     }
-    assert_eq!(simd::decode(&stream, p.level).as_deref(), Some(x));
+    assert_eq!(simd::decode(&stream, p.level).as_deref(), Ok(x));
 
     if !x.is_empty() || !is_pending(Deviation::SimdStreamingEncoderEmpty) {
         let unwrapped = oracle::encode(x, 0);
-        let mut encoder = simd::Encoder::new(p.level);
+        let mut encoder = simd::Encoder::new(p.level, 0).unwrap();
         let mut got = Vec::new();
         for piece in x.chunks(p.chunk) {
             encoder.encode(piece, &mut got);
@@ -222,6 +222,9 @@ pub fn check_roundtrip(data: &[u8]) {
 
 /// The `*_unchecked` functions, writing into buffers of exactly the
 /// documented size between canaries.
+// Exercises the deprecated `*_unchecked` functions: public until 1.0, so
+// still fuzzed (spec 0010 §7).
+#[allow(deprecated)]
 pub fn check_unchecked(data: &[u8]) {
     let Some((&byte, x)) = data.split_first() else {
         return;

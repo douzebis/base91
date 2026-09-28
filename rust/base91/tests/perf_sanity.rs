@@ -63,9 +63,9 @@ struct Rates {
 }
 
 fn simd_rates(x: &[u8], level: SimdLevel, width: usize) -> Rates {
-    let stream = simd::encode(x, level, width);
+    let stream = simd::encode(x, level, width).unwrap();
     Rates {
-        encode: throughput(|| simd::encode(black_box(x), level, width).len()),
+        encode: throughput(|| simd::encode(black_box(x), level, width).unwrap().len()),
         decode: throughput(|| simd::decode(black_box(&stream), level).unwrap().len()),
     }
 }

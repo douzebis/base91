@@ -11,6 +11,9 @@
 
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
+use core::mem::MaybeUninit;
+
+use crate::Error;
 
 /// The 91-character encoding alphabet, in canonical order.
 ///
@@ -52,8 +55,9 @@ pub(crate) const DECTAB: &[u8; 256] = &{
 
 /// Stateful basE91 encoder.
 ///
-/// Feed input in chunks with [`encode`][Encoder::encode]; call
-/// [`finish`][Encoder::finish] to flush the remaining bits.
+/// Feed input in chunks with [`encode`][Encoder::encode] (or
+/// [`encode_slice`][Encoder::encode_slice]); call [`finish`][Encoder::finish]
+/// (or [`finish_slice`][Encoder::finish_slice]) to flush the remaining bits.
 ///
 /// ```
 /// use base91::Encoder;
@@ -63,13 +67,12 @@ pub(crate) const DECTAB: &[u8; 256] = &{
 /// enc.encode(b"Hello, world!", &mut out);
 /// enc.finish(&mut out);
 /// ```
-#[cfg(feature = "alloc")]
+#[derive(Clone, Debug)]
 pub struct Encoder {
     queue: u32,
     nbits: u32,
 }
 
-#[cfg(feature = "alloc")]
 impl Encoder {
     /// Create a new encoder with empty state.
     #[inline]
@@ -80,17 +83,59 @@ impl Encoder {
     /// Encode `input`, appending base91 characters to `output`.
     ///
     /// Returns the number of bytes written.
+    #[cfg(feature = "alloc")]
     #[inline]
     pub fn encode(&mut self, input: &[u8], output: &mut Vec<u8>) -> usize {
-        // Reserve worst-case space up front so the hot loop never reallocates.
-        // Vec::push reloads ptr/cap/len from memory after every call because
-        // grow_one (the slow path) may move the allocation — LLVM cannot hoist
-        // the capacity check.  Writing into spare_capacity_mut() instead gives
-        // LLVM a fixed-length slice: ptr stays in a register, no capacity
-        // checks inside the loop.
+        // Writing into the spare capacity instead of pushing gives LLVM a
+        // fixed-length slice: no capacity checks inside the loop.
         output.reserve(crate::encode_size_hint(input.len()));
-        let spare = output.spare_capacity_mut();
+        let n = self.encode_uninit(input, output.spare_capacity_mut());
+        // SAFETY: `encode_uninit` initialized the first `n` bytes of the
+        // spare capacity.
+        unsafe { output.set_len(output.len() + n) };
+        n
+    }
 
+    /// Encode `input` into `output`, and return the number of bytes written.
+    ///
+    /// `output` must hold at least `encode_size_hint(input.len())` bytes;
+    /// otherwise nothing is written and the error gives that size.
+    pub fn encode_slice(&mut self, input: &[u8], output: &mut [u8]) -> Result<usize, Error> {
+        let needed = crate::encode_size_hint(input.len());
+        if output.len() < needed {
+            return Err(Error::BufferTooSmall { needed });
+        }
+        Ok(self.encode_uninit(input, crate::as_uninit(output)))
+    }
+
+    /// Flush remaining bits and return the number of bytes written (0–2).
+    #[cfg(feature = "alloc")]
+    #[inline]
+    pub fn finish(mut self, output: &mut Vec<u8>) -> usize {
+        output.reserve(2);
+        let n = self.finish_uninit(output.spare_capacity_mut());
+        // SAFETY: as in `encode`.
+        unsafe { output.set_len(output.len() + n) };
+        n
+    }
+
+    /// Flush remaining bits into `output`, return the number of bytes
+    /// written (0–2), and reset the encoder.
+    ///
+    /// `output` must hold the bytes to write; otherwise nothing is written,
+    /// the state is kept, and the error gives the size.
+    pub fn finish_slice(&mut self, output: &mut [u8]) -> Result<usize, Error> {
+        let needed = self.finish_len();
+        if output.len() < needed {
+            return Err(Error::BufferTooSmall { needed });
+        }
+        Ok(self.finish_uninit(crate::as_uninit(output)))
+    }
+
+    /// Encoding core: `out` holds at least `encode_size_hint(input.len())`
+    /// bytes (the pending bits, at most 13, never make more than that).
+    #[inline]
+    pub(crate) fn encode_uninit(&mut self, input: &[u8], out: &mut [MaybeUninit<u8>]) -> usize {
         // Hoist state to locals so LLVM can keep them in registers.
         let mut queue = self.queue;
         let mut nbits = self.nbits;
@@ -108,45 +153,48 @@ impl Encoder {
                     // LLVM emits immediate-count shifts instead of setae+shr cl.
                     let q = val / 91;
                     let r = val - q * 91;
-                    spare[n].write(ENCTAB[r as usize]);
-                    spare[n + 1].write(ENCTAB[q as usize]);
+                    out[n].write(ENCTAB[r as usize]);
+                    out[n + 1].write(ENCTAB[q as usize]);
                 } else {
                     val = queue & 0x3fff; // take 14 bits
                     queue >>= 14;
                     nbits -= 14;
                     let q = val / 91;
                     let r = val - q * 91;
-                    spare[n].write(ENCTAB[r as usize]);
-                    spare[n + 1].write(ENCTAB[q as usize]);
+                    out[n].write(ENCTAB[r as usize]);
+                    out[n + 1].write(ENCTAB[q as usize]);
                 }
                 n += 2;
             }
         }
-
-        // Safety: we wrote exactly n bytes into spare_capacity_mut(), which
-        // has at least encode_size_hint(input.len()) slots — always ≥ n.
-        unsafe { output.set_len(output.len() + n) };
 
         self.queue = queue;
         self.nbits = nbits;
         n
     }
 
-    /// Flush remaining bits and return the number of bytes written (0–2).
-    #[inline]
-    pub fn finish(self, output: &mut Vec<u8>) -> usize {
-        let before = output.len();
-        if self.nbits > 0 {
-            output.push(ENCTAB[(self.queue % 91) as usize]);
-            if self.nbits > 7 || self.queue > 90 {
-                output.push(ENCTAB[(self.queue / 91) as usize]);
-            }
+    /// Bytes `finish` writes: 0, 1 or 2.
+    fn finish_len(&self) -> usize {
+        match self.nbits {
+            0 => 0,
+            _ if self.nbits > 7 || self.queue > 90 => 2,
+            _ => 1,
         }
-        output.len() - before
+    }
+
+    pub(crate) fn finish_uninit(&mut self, out: &mut [MaybeUninit<u8>]) -> usize {
+        let n = self.finish_len();
+        if n > 0 {
+            out[0].write(ENCTAB[(self.queue % 91) as usize]);
+        }
+        if n > 1 {
+            out[1].write(ENCTAB[(self.queue / 91) as usize]);
+        }
+        *self = Self::new();
+        n
     }
 }
 
-#[cfg(feature = "alloc")]
 impl Default for Encoder {
     fn default() -> Self {
         Self::new()
@@ -159,9 +207,11 @@ impl Default for Encoder {
 
 /// Stateful basE91 decoder.
 ///
-/// Feed encoded text in chunks with [`decode`][Decoder::decode]; call
-/// [`finish`][Decoder::finish] to flush any remaining partial value.
-/// Non-alphabet bytes (including newlines) are silently ignored.
+/// Feed encoded text in chunks with [`decode`][Decoder::decode] (or
+/// [`decode_slice`][Decoder::decode_slice]); call [`finish`][Decoder::finish]
+/// (or [`finish_slice`][Decoder::finish_slice]) to flush any remaining
+/// partial value. Non-alphabet bytes (including newlines) are silently
+/// ignored.
 ///
 /// ```
 /// use base91::Decoder;
@@ -171,7 +221,7 @@ impl Default for Encoder {
 /// dec.decode(b"PM{(8&~AA", &mut out);
 /// dec.finish(&mut out);
 /// ```
-#[cfg(feature = "alloc")]
+#[derive(Clone, Debug)]
 pub struct Decoder {
     queue: u32,
     nbits: u32,
@@ -179,7 +229,6 @@ pub struct Decoder {
     val: u32,
 }
 
-#[cfg(feature = "alloc")]
 impl Decoder {
     /// Create a new decoder with empty state.
     #[inline]
@@ -195,14 +244,65 @@ impl Decoder {
     ///
     /// Non-alphabet bytes are silently skipped.
     /// Returns the number of bytes written.
+    #[cfg(feature = "alloc")]
     #[inline]
     pub fn decode(&mut self, input: &[u8], output: &mut Vec<u8>) -> usize {
-        // Same spare_capacity_mut strategy as Encoder::encode — see that
-        // method for the rationale. `+ 1`: a character pending from the
-        // previous call can complete one more pair (spec 0006 §5b).
-        output.reserve(crate::decode_size_hint(input.len() + 1));
-        let spare = output.spare_capacity_mut();
+        output.reserve(self.decode_len(input.len()));
+        let n = self.decode_uninit(input, output.spare_capacity_mut());
+        // SAFETY: `decode_uninit` initialized the first `n` bytes of the
+        // spare capacity.
+        unsafe { output.set_len(output.len() + n) };
+        n
+    }
 
+    /// Decode `input` into `output`, and return the number of bytes written.
+    ///
+    /// `output` must hold at least `decode_size_hint(input.len())` bytes, or
+    /// `decode_size_hint(input.len() + 1)` when a character is pending from
+    /// the previous call; otherwise nothing is written and the error gives
+    /// that size.
+    pub fn decode_slice(&mut self, input: &[u8], output: &mut [u8]) -> Result<usize, Error> {
+        let needed = self.decode_len(input.len());
+        if output.len() < needed {
+            return Err(Error::BufferTooSmall { needed });
+        }
+        Ok(self.decode_uninit(input, crate::as_uninit(output)))
+    }
+
+    /// Flush any remaining partial value (0 or 1 byte).
+    #[cfg(feature = "alloc")]
+    #[inline]
+    pub fn finish(mut self, output: &mut Vec<u8>) -> usize {
+        output.reserve(1);
+        let n = self.finish_uninit(output.spare_capacity_mut());
+        // SAFETY: as in `decode`.
+        unsafe { output.set_len(output.len() + n) };
+        n
+    }
+
+    /// Flush any remaining partial value into `output`, return the number of
+    /// bytes written (0 or 1), and reset the decoder.
+    ///
+    /// `output` must hold the bytes to write; otherwise nothing is written,
+    /// the state is kept, and the error gives the size.
+    pub fn finish_slice(&mut self, output: &mut [u8]) -> Result<usize, Error> {
+        let needed = self.finish_len();
+        if output.len() < needed {
+            return Err(Error::BufferTooSmall { needed });
+        }
+        Ok(self.finish_uninit(crate::as_uninit(output)))
+    }
+
+    /// Upper bound on what one call decodes from `n` bytes: a character
+    /// pending from the previous call can complete one more pair (spec 0006
+    /// §5b).
+    pub(crate) fn decode_len(&self, n: usize) -> usize {
+        crate::decode_size_hint(n + usize::from(self.val != u32::MAX))
+    }
+
+    /// Decoding core: `out` holds at least `decode_len(input.len())` bytes.
+    #[inline]
+    pub(crate) fn decode_uninit(&mut self, input: &[u8], out: &mut [MaybeUninit<u8>]) -> usize {
         let mut queue = self.queue;
         let mut nbits = self.nbits;
         let mut val = self.val;
@@ -225,12 +325,12 @@ impl Decoder {
                 nbits += if v & 0x1fff > 88 { 13 } else { 14 };
 
                 // Drain: at most 2 bytes (unrolled, no loop).
-                spare[n].write(queue as u8);
+                out[n].write(queue as u8);
                 n += 1;
                 queue >>= 8;
                 nbits -= 8;
                 if nbits >= 8 {
-                    spare[n].write(queue as u8);
+                    out[n].write(queue as u8);
                     n += 1;
                     queue >>= 8;
                     nbits -= 8;
@@ -238,165 +338,30 @@ impl Decoder {
             }
         }
 
-        // Safety: we wrote exactly n bytes into spare_capacity_mut(), which
-        // has at least decode_size_hint(input.len()) slots — always ≥ n.
-        unsafe { output.set_len(output.len() + n) };
-
         self.queue = queue;
         self.nbits = nbits;
         self.val = val;
         n
     }
 
-    /// Flush any remaining partial value (0 or 1 byte).
-    #[inline]
-    pub fn finish(self, output: &mut Vec<u8>) -> usize {
-        let before = output.len();
-        if self.val != u32::MAX {
-            output.push((self.queue | (self.val << self.nbits)) as u8);
+    /// Bytes `finish` writes: 0, or 1 for a pending character.
+    pub(crate) fn finish_len(&self) -> usize {
+        usize::from(self.val != u32::MAX)
+    }
+
+    pub(crate) fn finish_uninit(&mut self, out: &mut [MaybeUninit<u8>]) -> usize {
+        let n = self.finish_len();
+        if n > 0 {
+            out[0].write((self.queue | (self.val << self.nbits)) as u8);
         }
-        output.len() - before
+        *self = Self::new();
+        n
     }
 }
 
-#[cfg(feature = "alloc")]
 impl Default for Decoder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Unchecked one-shot helpers (raw pointer output, no bounds checking)
-// ---------------------------------------------------------------------------
-
-/// Encode `input` into `output` without bounds checking.
-///
-/// # Safety
-/// `output` must point to at least `encode_size_hint(input.len())` writable bytes.
-pub(crate) unsafe fn encode_unchecked(input: &[u8], output: *mut u8) -> usize {
-    let mut queue: u32 = 0;
-    let mut nbits: u32 = 0;
-    let mut n: usize = 0;
-
-    for &byte in input {
-        queue |= (byte as u32) << nbits;
-        nbits += 8;
-        if nbits > 13 {
-            // Two separate arms with duplicated writes prevent LLVM from
-            // merging them into a cmovae/setae + variable-count shift.
-            // val > 88 holds ~98.9 % of the time (13-bit path), so the branch
-            // is well-predicted and immediate shifts dominate.
-            // Safety: val ≤ 91²−1 = 8280, so q,r ∈ 0..=90.
-            let val = queue & 0x1fff;
-            if val > 88 {
-                // 13-bit path: val in 89..=8191
-                queue >>= 13;
-                nbits -= 13;
-                let q = val / 91;
-                let r = val - q * 91;
-                unsafe {
-                    output.add(n).write(*ENCTAB.get_unchecked(r as usize));
-                    output.add(n + 1).write(*ENCTAB.get_unchecked(q as usize));
-                }
-            } else {
-                // 14-bit path: val in 0..=88 or 8192..=8280
-                let val = queue & 0x3fff;
-                queue >>= 14;
-                nbits -= 14;
-                let q = val / 91;
-                let r = val - q * 91;
-                unsafe {
-                    output.add(n).write(*ENCTAB.get_unchecked(r as usize));
-                    output.add(n + 1).write(*ENCTAB.get_unchecked(q as usize));
-                }
-            }
-            n += 2;
-        }
-    }
-    if nbits > 0 {
-        // Safety: queue < 91² at end-of-input, so r,q ∈ 0..=90.
-        let r = queue % 91;
-        let q = queue / 91;
-        unsafe {
-            output.add(n).write(*ENCTAB.get_unchecked(r as usize));
-        }
-        n += 1;
-        if nbits > 7 || queue > 90 {
-            unsafe {
-                output.add(n).write(*ENCTAB.get_unchecked(q as usize));
-            }
-            n += 1;
-        }
-    }
-    n
-}
-
-/// Decode `input` into `output` without bounds checking.
-///
-/// # Safety
-/// `output` must point to at least `decode_size_hint(input.len())` writable bytes.
-pub(crate) unsafe fn decode_unchecked(input: &[u8], output: *mut u8) -> usize {
-    let mut queue: u32 = 0;
-    let mut nbits: u32 = 0;
-    let mut n: usize = 0;
-    let mut ptr = input.as_ptr();
-    let end = unsafe { ptr.add(input.len()) };
-
-    // Outer loop: find first char of a pair (skip non-alphabet).
-    // After emitting bytes, the inner inline block fetches the next char
-    // directly — matching GCC's unrolled decode loop layout.
-    loop {
-        // --- scan for first char of pair ---
-        let d0 = loop {
-            if ptr == end {
-                return n;
-            }
-            let b = unsafe { *ptr };
-            ptr = unsafe { ptr.add(1) };
-            let d = unsafe { *DECTAB.get_unchecked(b as usize) } as u32;
-            if d != 91 {
-                break d;
-            }
-        };
-
-        // --- scan for second char of pair ---
-        let d1 = loop {
-            if ptr == end {
-                // Flush pending first char (partial value).
-                unsafe {
-                    output.add(n).write((queue | (d0 << nbits)) as u8);
-                }
-                return n + 1;
-            }
-            let b = unsafe { *ptr };
-            ptr = unsafe { ptr.add(1) };
-            let d = unsafe { *DECTAB.get_unchecked(b as usize) } as u32;
-            if d != 91 {
-                break d;
-            }
-        };
-
-        // --- emit bytes ---
-        let v = d0 + d1 * 91;
-        queue |= v << nbits;
-        // Branchless 13/14-bit select: mirrors GCC's cmp+adc pattern.
-        // (v & 0x1fff > 88) is false ~1.1% of the time.
-        nbits += if v & 0x1fff > 88 { 13 } else { 14 };
-        unsafe {
-            output.add(n).write(queue as u8);
-        }
-        n += 1;
-        queue >>= 8;
-        nbits -= 8;
-        if nbits >= 8 {
-            unsafe {
-                output.add(n).write(queue as u8);
-            }
-            n += 1;
-            queue >>= 8;
-            nbits -= 8;
-        }
     }
 }
 

@@ -8,6 +8,10 @@
 //!
 //! Uses no `std`-only API of base91-rs, so it also runs under
 //! `--no-default-features --features alloc` (compile-time SIMD detection).
+//!
+//! The `*_unchecked` functions are deprecated since 0.3.0 (spec 0010) but
+//! stay public until 1.0, so they stay tested: the functions calling them
+//! allow the deprecation warning.
 
 use base91::simd::{self, SimdLevel};
 use base91_testkit::canary::Guarded;
@@ -24,6 +28,7 @@ fn inputs() -> impl Iterator<Item = Vec<u8>> {
 }
 
 /// `simd::decode_unchecked` into a buffer of exactly the documented size.
+#[allow(deprecated)]
 fn simd_decode_unchecked(stream: &[u8], level: SimdLevel) -> Vec<u8> {
     let hint = simd::decode_size_hint(stream.len());
     let mut out = Guarded::new(hint);
@@ -34,6 +39,7 @@ fn simd_decode_unchecked(stream: &[u8], level: SimdLevel) -> Vec<u8> {
 }
 
 #[test]
+#[allow(deprecated)]
 fn simd_unchecked_matches_vec_api() {
     for x in inputs() {
         let n = x.len();
@@ -41,7 +47,7 @@ fn simd_unchecked_matches_vec_api() {
         for level in LEVELS {
             for wrap in WRAPS {
                 let what = format!("n={n}, wrap={wrap}, {level:?}");
-                let expected = simd::encode(&x, level, wrap);
+                let expected = simd::encode(&x, level, wrap).unwrap();
                 let hint = simd::encode_size_hint(n, wrap);
                 assert!(expected.len() <= hint, "encode hint too small: {what}");
 
@@ -78,6 +84,7 @@ fn simd_unchecked_matches_vec_api() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn henke_unchecked_matches_vec_api() {
     for x in inputs() {
         let n = x.len();

@@ -74,7 +74,7 @@ proptest! {
     /// Unwrapped SIMD encoding equals the oracle, at every level.
     #[test]
     fn simd_encode_matches_oracle(x in vec(any::<u8>(), 0..2000), level in level()) {
-        prop_assert_eq!(simd::encode(&x, level, 0), oracle::encode(&x, 0));
+        prop_assert_eq!(simd::encode(&x, level, 0), Ok(oracle::encode(&x, 0)));
     }
 
     /// Wrapped SIMD encoding equals the oracle (spec 0006, bug 3).
@@ -85,7 +85,7 @@ proptest! {
         width in prop_oneof![Just(32usize), Just(64), Just(96)],
     ) {
         if !is_pending(Deviation::SimdWrappedEncoding) {
-            prop_assert_eq!(simd::encode(&x, level, width), oracle::encode(&x, width));
+            prop_assert_eq!(simd::encode(&x, level, width), Ok(oracle::encode(&x, width)));
         }
     }
 
@@ -97,7 +97,7 @@ proptest! {
         width in width(),
     ) {
         let stream = oracle::encode(&x, width);
-        prop_assert_eq!(simd::decode(&stream, level), Some(x));
+        prop_assert_eq!(simd::decode(&stream, level), Ok(x));
     }
 
     /// Streaming SIMD encoding with any split equals the one-shot result.
@@ -105,7 +105,7 @@ proptest! {
     fn simd_streaming_encode_any_split((x, cuts) in bytes_and_cuts(1000), level in level()) {
         // Bug 4 (spec 0006): an empty stream fed through empty calls.
         if !x.is_empty() || !is_pending(Deviation::SimdStreamingEncoderEmpty) {
-            let mut encoder = simd::Encoder::new(level);
+            let mut encoder = simd::Encoder::new(level, 0).unwrap();
             let mut got = Vec::new();
             for piece in split(&x, &cuts) {
                 encoder.encode(piece, &mut got);
@@ -128,9 +128,9 @@ proptest! {
             let mut decoder = simd::Decoder::new(level);
             let mut got = Vec::new();
             for piece in split(&stream, &cuts) {
-                prop_assert!(decoder.decode(piece, &mut got));
+                prop_assert!(decoder.decode(piece, &mut got).is_ok());
             }
-            decoder.finish(&mut got);
+            prop_assert!(decoder.finish(&mut got).is_ok());
             prop_assert_eq!(got, x);
         }
     }
@@ -171,7 +171,7 @@ proptest! {
             && oracle::classify(&s) != oracle::Classification::Legacy
         {
             if let Ok(expected) = oracle::decode(&s) {
-                prop_assert_eq!(simd::decode(&s, SimdLevel::default()), Some(expected));
+                prop_assert_eq!(simd::decode(&s, SimdLevel::default()), Ok(expected));
             }
         }
     }

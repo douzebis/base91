@@ -132,6 +132,34 @@ kernels. This spec replaces that loop.
    all stages, is released.
 9. **One commit per stage**, each with every check passing. Stage 1
    starts with the kernel validation fix (§5) and its tests.
+10. **`simd::scalar` is deleted**, not made `pub(crate)` (decision 4): the
+    driver has its own scalar block codec, so nothing outside the module's
+    own tests used it, and a private module nothing uses is dead code. The
+    driver tests cover what its tests covered, chunking included.
+11. **Required sizes of the streaming slice calls** come from the state,
+    since a decoder may hold up to 15 characters from the previous call:
+    `simd::Decoder::decode_slice` needs at most 13 × ⌊(held + n) / 16⌋
+    bytes, never more than `decode_size_hint(n + 15)`; the legacy
+    `Decoder::decode_slice` needs `decode_size_hint(n + 1)` when a character
+    is pending; `simd::Encoder::encode_slice` and every `finish_slice` need
+    an exact size. The one-shot calls keep the rules of §2
+    (`decode_size_hint(len)`, exactly E(n, W) for `simd::encode_slice`,
+    `encode_size_hint(n)` for the legacy `encode_slice`).
+12. **After a decoding error, the contents of `out` are unspecified.** Only
+    `BufferTooSmall`, checked before anything is written, leaves `out` and
+    the state untouched. A failed decoder reports its error again on every
+    later call.
+13. **The deprecated SIMD `*_unchecked` on bad input:** `decode_unchecked`
+    returns 0 for an invalid stream (documented, pointing to
+    `decode_slice`); `encode_unchecked` panics on an invalid width.
+14. **Tests of deprecated functions** (the `*_unchecked`, public until 1.0)
+    carry `#[allow(deprecated)]`, on exactly those tests and with a comment:
+    calling the deprecated function is their purpose. Benchmarks and
+    examples use the slice API instead.
+15. **The legacy `Encoder` / `Decoder` get slice-based cores** (available
+    without `alloc`), with the `Vec` methods as thin wrappers; their
+    behavior is unchanged. The hand-written pointer versions of the legacy
+    `*_unchecked` are gone: the deprecated functions wrap the core.
 
 ## Specification
 

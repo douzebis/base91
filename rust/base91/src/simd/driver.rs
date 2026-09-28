@@ -31,7 +31,7 @@ use super::ArchLevel;
 use crate::Error;
 
 /// The SIMD alphabet in index order (spec 0008 §3.1).
-const ALPHABET: &[u8; 91] =
+pub(crate) const ALPHABET: &[u8; 91] =
     b"#$%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 
 /// Character to index; `NOT_ALPHABET` outside the alphabet.
@@ -368,19 +368,48 @@ impl EncodeCore {
         }
     }
 
-    /// Upper bound on what `encode` writes for `n` input bytes, `finish`
-    /// included.
-    pub(crate) fn capacity(n: usize, wrap: usize) -> usize {
-        // With the (at most 12) pending bits, 8n bits make at most
-        // ⌈(8n + 12) / 13⌉ groups of two characters.
-        let chars = 2 * (8 * n + 12).div_ceil(13);
-        // The header LF, one per completed line, the final LF.
-        let newlines = if wrap == 0 { 0 } else { 2 + chars / wrap };
-        1 + chars + newlines
+    /// Exactly what `encode` writes for `n` input bytes.
+    pub(crate) fn encode_len(&self, n: usize) -> usize {
+        if n == 0 {
+            return 0;
+        }
+        let header = if self.started {
+            0
+        } else {
+            1 + usize::from(self.wrap > 0)
+        };
+        // Whole 13-bit groups from the pending bits and 8n new ones.
+        let chars = 2 * ((self.nbits as usize + 8 * n) / 13);
+        let newlines = if self.wrap == 0 {
+            0
+        } else {
+            (self.col + chars) / self.wrap
+        };
+        header + chars + newlines
+    }
+
+    /// Exactly what `finish` writes.
+    pub(crate) fn finish_len(&self) -> usize {
+        if !self.started {
+            return 0;
+        }
+        let chars = match self.nbits {
+            0 => 0,
+            1..=6 => 1,
+            _ => 2,
+        };
+        // An LF when the characters complete a line, and a final LF unless
+        // the stream ends on a line boundary: ⌈(col + chars) / W⌉ in all.
+        let newlines = if self.wrap == 0 {
+            0
+        } else {
+            (self.col + chars).div_ceil(self.wrap)
+        };
+        chars + newlines
     }
 
     /// Encodes `input` into `out`, which holds at least
-    /// `capacity(input.len(), wrap)` bytes, and returns the bytes written.
+    /// `encode_len(input.len())` bytes, and returns the bytes written.
     pub(crate) fn encode(&mut self, input: &[u8], out: &mut [MaybeUninit<u8>]) -> usize {
         if input.is_empty() {
             return 0;
@@ -441,7 +470,7 @@ impl EncodeCore {
     }
 
     /// Writes the last characters and the final LF (spec 0008 §3.4) into
-    /// `out`, which holds at least `capacity(0, wrap)` bytes, and resets the
+    /// `out`, which holds at least `finish_len()` bytes, and resets the
     /// encoder.
     pub(crate) fn finish(&mut self, out: &mut [MaybeUninit<u8>]) -> usize {
         let mut w = 0;
@@ -552,17 +581,24 @@ impl DecodeCore {
         }
     }
 
-    /// Upper bound on what `decode` writes for `n` input bytes.
-    pub(crate) fn capacity(n: usize) -> usize {
-        // Up to 15 carried characters complete at most ⌊(n + 15) / 16⌋ blocks.
-        13 * n.div_ceil(16)
+    /// Upper bound on what `decode` writes for `n` input bytes: the blocks
+    /// that the carried characters and `n` more can complete. Never more
+    /// than `decode_size_hint(n + 15)`.
+    pub(crate) fn decode_len(&self, n: usize) -> usize {
+        13 * ((self.carry_len + n) / 16)
     }
 
-    /// Upper bound on what `finish` writes.
-    pub(crate) const FINISH_CAPACITY: usize = 12;
+    /// Exactly what `finish` writes, or the error it reports.
+    pub(crate) fn finish_len(&self) -> Result<usize, Error> {
+        match self.phase {
+            Phase::Failed(e) => Err(e),
+            Phase::Header | Phase::HeaderCr => Ok(0),
+            Phase::Body => TAIL_BYTES[self.carry_len].ok_or(Error::InvalidLength),
+        }
+    }
 
     /// Decodes `input` into `out`, which holds at least
-    /// `capacity(input.len())` bytes, and returns the bytes written.
+    /// `decode_len(input.len())` bytes, and returns the bytes written.
     pub(crate) fn decode(
         &mut self,
         input: &[u8],
@@ -624,7 +660,7 @@ impl DecodeCore {
     }
 
     /// Checks the end of the stream and writes the last bytes into `out`,
-    /// which holds at least `FINISH_CAPACITY` bytes.
+    /// which holds at least `finish_len()` bytes.
     pub(crate) fn finish(&mut self, out: &mut [MaybeUninit<u8>]) -> Result<usize, Error> {
         match self.phase {
             Phase::Failed(e) => Err(e),
@@ -831,7 +867,6 @@ impl DecodeCore {
 mod tests {
     use super::super::{effective_level, SimdLevel};
     use super::*;
-    use alloc::vec::Vec;
     use base91_testkit::mutate::mutations;
     use base91_testkit::oracle::{self, Classification, DecodeError};
     use base91_testkit::rng::Rng;
@@ -858,7 +893,7 @@ mod tests {
     }
 
     /// Decodes a SIMD stream with the core, in pieces of the given lengths
-    /// (the rest in one piece), each into exactly the documented capacity.
+    /// (the rest in one piece), each into exactly the documented bound.
     fn decode(stream: &[u8], level: ArchLevel, lengths: &[usize]) -> Result<Vec<u8>, Error> {
         let dash = stream.iter().position(|&b| !is_whitespace(b)).unwrap();
         let mut core = DecodeCore::new(level, dash + 1);
@@ -868,7 +903,7 @@ mod tests {
         while !rest.is_empty() {
             let n = lengths.next().map_or(rest.len(), |&n| n.min(rest.len()));
             let (piece, tail) = rest.split_at(n);
-            let capacity = DecodeCore::capacity(piece.len());
+            let capacity = core.decode_len(piece.len());
             out.reserve_exact(capacity);
             let spare = &mut out.spare_capacity_mut()[..capacity];
             let written = core.decode(piece, spare)?;
@@ -877,9 +912,11 @@ mod tests {
             unsafe { out.set_len(out.len() + written) };
             rest = tail;
         }
-        out.reserve_exact(DecodeCore::FINISH_CAPACITY);
-        let spare = &mut out.spare_capacity_mut()[..DecodeCore::FINISH_CAPACITY];
+        let capacity = core.finish_len()?;
+        out.reserve_exact(capacity);
+        let spare = &mut out.spare_capacity_mut()[..capacity];
         let written = core.finish(spare)?;
+        assert_eq!(written, capacity);
         // SAFETY: as above.
         unsafe { out.set_len(out.len() + written) };
         Ok(out)
@@ -942,8 +979,8 @@ mod tests {
         eprintln!("[driver decode] compared {compared}, of which rejected streams {rejected}");
     }
 
-    /// The core's encoding is the oracle's, one-shot and in pieces, into
-    /// exactly the documented capacity.
+    /// The core's encoding is the oracle's, one-shot and in pieces, and
+    /// every call writes exactly the documented length.
     #[test]
     fn encode_matches_oracle() {
         let mut rng = Rng::for_test("driver_encode");
@@ -960,17 +997,19 @@ mod tests {
                         while !rest.is_empty() {
                             let k = lengths.next().map_or(rest.len(), |&k| k.min(rest.len()));
                             let (piece, tail) = rest.split_at(k);
-                            let capacity = EncodeCore::capacity(piece.len(), width);
+                            let capacity = core.encode_len(piece.len());
                             out.reserve_exact(capacity);
                             let written =
                                 core.encode(piece, &mut out.spare_capacity_mut()[..capacity]);
+                            assert_eq!(written, capacity);
                             // SAFETY: the core initialized `written` bytes.
                             unsafe { out.set_len(out.len() + written) };
                             rest = tail;
                         }
-                        let capacity = EncodeCore::capacity(0, width);
+                        let capacity = core.finish_len();
                         out.reserve_exact(capacity);
                         let written = core.finish(&mut out.spare_capacity_mut()[..capacity]);
+                        assert_eq!(written, capacity);
                         // SAFETY: as above.
                         unsafe { out.set_len(out.len() + written) };
                         assert!(out == want, "n={n}, W={width}, {level:?}");

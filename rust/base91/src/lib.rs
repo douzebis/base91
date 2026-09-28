@@ -60,6 +60,7 @@
 extern crate alloc;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
+use core::mem::MaybeUninit;
 
 mod codec;
 mod error;
@@ -69,7 +70,6 @@ pub mod io;
 pub mod python;
 pub mod simd;
 
-#[cfg(feature = "alloc")]
 pub use codec::{Decoder, Encoder};
 pub use error::Error;
 
@@ -113,10 +113,6 @@ pub fn decode_size_hint(input_len: usize) -> usize {
 }
 
 /// Encode `input` to a new `Vec<u8>` of base91 characters.
-///
-/// The output buffer is pre-reserved to the exact upper bound, so no
-/// reallocation occurs and the Vec capacity check is eliminated from the
-/// hot loop by the branch predictor.
 #[cfg(feature = "alloc")]
 pub fn encode(input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(encode_size_hint(input.len()));
@@ -129,9 +125,6 @@ pub fn encode(input: &[u8]) -> Vec<u8> {
 /// Decode `input` (base91 characters) to a new `Vec<u8>`.
 ///
 /// Non-alphabet bytes are silently ignored.
-/// The output buffer is pre-reserved to the exact upper bound, so no
-/// reallocation occurs and the Vec capacity check is eliminated from the
-/// hot loop by the branch predictor.
 #[cfg(feature = "alloc")]
 pub fn decode(input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(decode_size_hint(input.len()));
@@ -139,6 +132,39 @@ pub fn decode(input: &[u8]) -> Vec<u8> {
     dec.decode(input, &mut out);
     dec.finish(&mut out);
     out
+}
+
+/// Encode `input` into `output`, and return the number of bytes written.
+///
+/// `output` must hold at least [`encode_size_hint`]`(input.len())` bytes;
+/// otherwise nothing is written and the error gives that size. Needs no
+/// allocator.
+///
+/// ```rust
+/// let mut buf = [0u8; 32];
+/// let n = base91::encode_slice(b"Hello, world!", &mut buf).unwrap();
+/// assert_eq!(base91::decode(&buf[..n]), b"Hello, world!");
+/// ```
+pub fn encode_slice(input: &[u8], output: &mut [u8]) -> Result<usize, Error> {
+    let needed = encode_size_hint(input.len());
+    if output.len() < needed {
+        return Err(Error::BufferTooSmall { needed });
+    }
+    Ok(encode_uninit(input, as_uninit(output)))
+}
+
+/// Decode `input` (base91 characters) into `output`, and return the number
+/// of bytes written. Non-alphabet bytes are silently ignored.
+///
+/// `output` must hold at least [`decode_size_hint`]`(input.len())` bytes;
+/// otherwise nothing is written and the error gives that size. Needs no
+/// allocator.
+pub fn decode_slice(input: &[u8], output: &mut [u8]) -> Result<usize, Error> {
+    let needed = decode_size_hint(input.len());
+    if output.len() < needed {
+        return Err(Error::BufferTooSmall { needed });
+    }
+    Ok(decode_uninit(input, as_uninit(output)))
 }
 
 /// Encode `input` into a caller-provided buffer, without bounds checking.
@@ -149,18 +175,17 @@ pub fn decode(input: &[u8]) -> Vec<u8> {
 ///
 /// `output` must point to at least `encode_size_hint(input.len())` writable
 /// bytes.  Writing beyond that bound is undefined behaviour.
-///
-/// # Example
-///
-/// ```rust
-/// let input = b"Hello, world!";
-/// let mut buf = vec![0u8; base91::encode_size_hint(input.len())];
-/// let n = unsafe { base91::encode_unchecked(input, buf.as_mut_ptr()) };
-/// let encoded = &buf[..n];
-/// assert_eq!(base91::decode(encoded), input);
-/// ```
+#[deprecated(since = "0.3.0", note = "use `encode_slice`")]
 pub unsafe fn encode_unchecked(input: &[u8], output: *mut u8) -> usize {
-    codec::encode_unchecked(input, output)
+    // SAFETY: the caller guarantees `encode_size_hint(input.len())` writable
+    // bytes at `output`; they are only written.
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            output.cast::<MaybeUninit<u8>>(),
+            encode_size_hint(input.len()),
+        )
+    };
+    encode_uninit(input, out)
 }
 
 /// Decode `input` into a caller-provided buffer, without bounds checking.
@@ -172,18 +197,40 @@ pub unsafe fn encode_unchecked(input: &[u8], output: *mut u8) -> usize {
 ///
 /// `output` must point to at least `decode_size_hint(input.len())` writable
 /// bytes.  Writing beyond that bound is undefined behaviour.
-///
-/// # Example
-///
-/// ```rust
-/// let input = b"Hello, world!";
-/// let encoded = base91::encode(input);
-/// let mut buf = vec![0u8; base91::decode_size_hint(encoded.len())];
-/// let n = unsafe { base91::decode_unchecked(&encoded, buf.as_mut_ptr()) };
-/// assert_eq!(&buf[..n], input);
-/// ```
+#[deprecated(since = "0.3.0", note = "use `decode_slice`")]
 pub unsafe fn decode_unchecked(input: &[u8], output: *mut u8) -> usize {
-    codec::decode_unchecked(input, output)
+    // SAFETY: as in `encode_unchecked`, with `decode_size_hint`.
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            output.cast::<MaybeUninit<u8>>(),
+            decode_size_hint(input.len()),
+        )
+    };
+    decode_uninit(input, out)
+}
+
+/// One-shot legacy encoding into `out`, which holds at least
+/// `encode_size_hint(input.len())` bytes.
+fn encode_uninit(input: &[u8], out: &mut [MaybeUninit<u8>]) -> usize {
+    let mut enc = Encoder::new();
+    let n = enc.encode_uninit(input, out);
+    n + enc.finish_uninit(&mut out[n..])
+}
+
+/// One-shot legacy decoding into `out`, which holds at least
+/// `decode_size_hint(input.len())` bytes.
+fn decode_uninit(input: &[u8], out: &mut [MaybeUninit<u8>]) -> usize {
+    let mut dec = Decoder::new();
+    let n = dec.decode_uninit(input, out);
+    n + dec.finish_uninit(&mut out[n..])
+}
+
+/// Views an initialized buffer as the cores' output type.
+pub(crate) fn as_uninit(out: &mut [u8]) -> &mut [MaybeUninit<u8>] {
+    // SAFETY: `MaybeUninit<u8>` has the layout of `u8`, and the cores only
+    // ever write initialized bytes through the view, so `out` stays
+    // initialized.
+    unsafe { core::slice::from_raw_parts_mut(out.as_mut_ptr().cast(), out.len()) }
 }
 
 #[cfg(all(test, feature = "alloc"))]
@@ -213,7 +260,10 @@ mod tests {
         }
     }
 
+    // Tests of the deprecated functions: they stay public until 1.0, so they
+    // stay tested; calling them is the point (spec 0010 §7).
     #[test]
+    #[allow(deprecated)]
     fn unchecked_encode_matches_safe() {
         let input: Vec<u8> = (0u8..=255).collect();
         let safe = encode(&input);
@@ -223,6 +273,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn unchecked_decode_matches_safe() {
         let input: Vec<u8> = (0u8..=255).collect();
         let encoded = encode(&input);
@@ -230,5 +281,72 @@ mod tests {
         let mut buf = vec![0u8; decode_size_hint(encoded.len())];
         let n = unsafe { decode_unchecked(&encoded, buf.as_mut_ptr()) };
         assert_eq!(&buf[..n], safe.as_slice());
+    }
+
+    #[test]
+    fn slice_api_matches_vec_api() {
+        for len in 0..=300usize {
+            let input: Vec<u8> = (0u8..=255).cycle().take(len).collect();
+            let encoded = encode(&input);
+            let mut buf = vec![0u8; encode_size_hint(len)];
+            let n = encode_slice(&input, &mut buf).unwrap();
+            assert_eq!(&buf[..n], &encoded[..]);
+
+            let mut back = vec![0u8; decode_size_hint(encoded.len())];
+            let n = decode_slice(&encoded, &mut back).unwrap();
+            assert_eq!(&back[..n], &input[..]);
+        }
+    }
+
+    #[test]
+    fn slice_api_buffer_too_small_writes_nothing() {
+        let input = b"Hello, world!";
+        let needed = encode_size_hint(input.len());
+        let mut buf = vec![0xA5u8; needed - 1];
+        assert_eq!(
+            encode_slice(input, &mut buf),
+            Err(Error::BufferTooSmall { needed })
+        );
+        assert!(buf.iter().all(|&b| b == 0xA5));
+
+        let encoded = encode(input);
+        let needed = decode_size_hint(encoded.len());
+        let mut buf = vec![0xA5u8; needed - 1];
+        assert_eq!(
+            decode_slice(&encoded, &mut buf),
+            Err(Error::BufferTooSmall { needed })
+        );
+        assert!(buf.iter().all(|&b| b == 0xA5));
+    }
+
+    #[test]
+    fn streaming_slice_api_matches_vec_api() {
+        let input: Vec<u8> = (0u8..=255).cycle().take(2000).collect();
+        let encoded = encode(&input);
+        for chunk in [1, 2, 3, 7, 64] {
+            let mut enc = Encoder::new();
+            let mut out = Vec::new();
+            for piece in input.chunks(chunk) {
+                let mut buf = vec![0u8; encode_size_hint(piece.len())];
+                let n = enc.encode_slice(piece, &mut buf).unwrap();
+                out.extend_from_slice(&buf[..n]);
+            }
+            let mut buf = [0u8; 2];
+            let n = enc.finish_slice(&mut buf).unwrap();
+            out.extend_from_slice(&buf[..n]);
+            assert_eq!(out, encoded, "chunk={chunk}");
+
+            let mut dec = Decoder::new();
+            let mut back = Vec::new();
+            for piece in encoded.chunks(chunk) {
+                let mut buf = vec![0u8; decode_size_hint(piece.len() + 1)];
+                let n = dec.decode_slice(piece, &mut buf).unwrap();
+                back.extend_from_slice(&buf[..n]);
+            }
+            let mut buf = [0u8; 1];
+            let n = dec.finish_slice(&mut buf).unwrap();
+            back.extend_from_slice(&buf[..n]);
+            assert_eq!(back, input, "chunk={chunk}");
+        }
     }
 }

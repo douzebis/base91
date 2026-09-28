@@ -39,20 +39,19 @@
 //! SIMD target features there makes the kernels slower, not faster, because
 //! the compiler lowers them to scalar code.
 
-#[cfg(feature = "alloc")]
-pub mod scalar;
-
-#[cfg(all(feature = "alloc", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub(crate) mod x86;
 
-#[cfg(all(feature = "alloc", target_arch = "aarch64"))]
+#[cfg(target_arch = "aarch64")]
 pub(crate) mod aarch64;
 
-#[cfg(feature = "alloc")]
 mod driver;
 
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
+use core::mem::MaybeUninit;
+
+use crate::Error;
 
 // ---------------------------------------------------------------------------
 // Public SimdLevel
@@ -172,7 +171,6 @@ fn arch_level() -> ArchLevel {
 //
 // The kernels this returns are safe to call: their target features were
 // detected at runtime (`std`) or are enabled at compile time (`no_std`).
-#[cfg(feature = "alloc")]
 fn effective_level(max_level: SimdLevel) -> ArchLevel {
     match (arch_level(), max_level) {
         // If caller caps at Scalar, always use scalar.
@@ -241,139 +239,257 @@ pub fn decode_size_hint(encoded_len: usize) -> usize {
     encoded_len * 7 / 8 + 1
 }
 
-/// Encode `input` using the SIMD fixed-width variant.
+/// Characters for the tail of `n mod 13` input bytes (spec 0008 §3.3).
+const TAIL_CHARS: [usize; 13] = [0, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15];
+
+/// Checks a line width: 0 (unwrapped) or a multiple of 32 (spec 0008 §3.4).
+fn check_width(wrap: usize) -> Result<(), Error> {
+    if wrap.is_multiple_of(32) {
+        Ok(())
+    } else {
+        Err(Error::InvalidWidth { width: wrap })
+    }
+}
+
+/// Exact length E(n, W) of the stream encoding `n` bytes with line width
+/// `wrap` (spec 0008 §3.4), final LF included.
+pub fn encoded_len(n: usize, wrap: usize) -> Result<usize, Error> {
+    check_width(wrap)?;
+    if n == 0 {
+        return Ok(0);
+    }
+    let payload = 16 * (n / 13) + TAIL_CHARS[n % 13];
+    Ok(if wrap == 0 {
+        1 + payload
+    } else {
+        2 + payload + payload.div_ceil(wrap)
+    })
+}
+
+/// Encode `input` using the SIMD fixed-width variant (spec 0008 §3).
 ///
-/// Output begins with `-` then SIMD-alphabet characters.
-/// `wrap=0` means no line wrapping; otherwise the payload is written in lines
-/// of `wrap` characters, each followed by `\n` (spec 0008 §3.4).
-/// `max_level` caps the SIMD kernel used; [`SimdLevel::default`] uses the best
-/// available.
-///
-/// # Panics
-/// If `wrap` is neither 0 nor a multiple of 32.
+/// `wrap` is 0 (no line wrapping) or a multiple of 32: the payload is then
+/// written in lines of `wrap` characters, each followed by `\n`.
+/// `max_level` caps the SIMD kernel used; [`SimdLevel::default`] uses the
+/// best available.
 #[cfg(feature = "alloc")]
-pub fn encode(input: &[u8], max_level: SimdLevel, wrap: usize) -> Vec<u8> {
-    assert!(
-        wrap.is_multiple_of(32),
-        "line width must be 0 or a multiple of 32"
-    );
-    let mut core = driver::EncodeCore::new(effective_level(max_level), wrap);
-    let mut out = Vec::with_capacity(driver::EncodeCore::capacity(input.len(), wrap));
-    let spare = out.spare_capacity_mut();
-    let n = core.encode(input, spare);
-    let n = n + core.finish(&mut spare[n..]);
-    // SAFETY: the core initialized the first `n` bytes of the spare capacity.
+pub fn encode(input: &[u8], max_level: SimdLevel, wrap: usize) -> Result<Vec<u8>, Error> {
+    let len = encoded_len(input.len(), wrap)?;
+    let mut out = Vec::with_capacity(len);
+    let n = encode_uninit(input, max_level, wrap, &mut out.spare_capacity_mut()[..len]);
+    // SAFETY: `encode_uninit` initialized the first `n` bytes of the spare
+    // capacity.
     unsafe { out.set_len(n) };
-    out
+    Ok(out)
+}
+
+/// Encode `input` into `output`, and return the number of bytes written.
+///
+/// `output` must hold at least [`encoded_len`]`(input.len(), wrap)` bytes;
+/// otherwise nothing is written and the error gives that size. Needs no
+/// allocator.
+pub fn encode_slice(
+    input: &[u8],
+    max_level: SimdLevel,
+    wrap: usize,
+    output: &mut [u8],
+) -> Result<usize, Error> {
+    let needed = encoded_len(input.len(), wrap)?;
+    if output.len() < needed {
+        return Err(Error::BufferTooSmall { needed });
+    }
+    Ok(encode_uninit(
+        input,
+        max_level,
+        wrap,
+        &mut crate::as_uninit(output)[..needed],
+    ))
+}
+
+/// One-shot encoding into `out`, which holds `encoded_len(input.len(),
+/// wrap)` bytes (`wrap` already checked).
+fn encode_uninit(
+    input: &[u8],
+    max_level: SimdLevel,
+    wrap: usize,
+    out: &mut [MaybeUninit<u8>],
+) -> usize {
+    let mut core = driver::EncodeCore::new(effective_level(max_level), wrap);
+    let n = core.encode(input, out);
+    n + core.finish(&mut out[n..])
 }
 
 /// Decode `input`, auto-detecting the format (spec 0008 §2).
 ///
 /// After leading whitespace, a `-` indicates a SIMD fixed-width stream,
 /// decoded strictly (spec 0008 §3.5); anything else is decoded as a Henke
-/// stream. Returns `None` for an invalid SIMD stream. `max_level` caps the
-/// SIMD kernel used.
+/// stream, which never fails. `max_level` caps the SIMD kernel used.
 #[cfg(feature = "alloc")]
-pub fn decode(input: &[u8], max_level: SimdLevel) -> Option<Vec<u8>> {
+pub fn decode(input: &[u8], max_level: SimdLevel) -> Result<Vec<u8>, Error> {
+    let mut out = Vec::with_capacity(decode_size_hint(input.len()));
+    let spare = out.spare_capacity_mut();
+    let n = decode_uninit(input, max_level, spare)?;
+    // SAFETY: `decode_uninit` initialized the first `n` bytes of the spare
+    // capacity.
+    unsafe { out.set_len(n) };
+    Ok(out)
+}
+
+/// Decode `input` into `output`, auto-detecting the format as [`decode`]
+/// does, and return the number of bytes written.
+///
+/// `output` must hold at least [`decode_size_hint`]`(input.len())` bytes;
+/// otherwise nothing is written and the error gives that size. After a
+/// decoding error, the contents of `output` are unspecified. Needs no
+/// allocator.
+pub fn decode_slice(input: &[u8], max_level: SimdLevel, output: &mut [u8]) -> Result<usize, Error> {
+    let needed = decode_size_hint(input.len());
+    if output.len() < needed {
+        return Err(Error::BufferTooSmall { needed });
+    }
+    decode_uninit(input, max_level, crate::as_uninit(output))
+}
+
+/// One-shot decoding into `out`, which holds at least
+/// `decode_size_hint(input.len())` bytes: never less than the streaming
+/// decoder's bounds for a whole stream.
+fn decode_uninit(
+    input: &[u8],
+    max_level: SimdLevel,
+    out: &mut [MaybeUninit<u8>],
+) -> Result<usize, Error> {
     let mut decoder = Decoder::new(max_level);
-    let mut out = Vec::new();
-    (decoder.decode_inner(input, &mut out) && decoder.finish_inner(&mut out)).then_some(out)
+    let n = decoder.decode_uninit(input, out)?;
+    Ok(n + decoder.finish_uninit(&mut out[n..])?)
 }
 
 /// Encode `input` into a caller-provided buffer without bounds checking.
 /// Returns the number of bytes written (including the `-` prefix).
 ///
-/// Writes exactly what [`encode`] returns for the same arguments; empty
-/// input writes nothing and returns 0. It currently encodes into a
-/// temporary `Vec` and copies the result (one allocation per call); spec
-/// 0010 replaces this function with a slice-based API.
+/// Writes exactly what [`encode`] returns for the same arguments.
+///
+/// # Panics
+/// If `wrap` is neither 0 nor a multiple of 32.
 ///
 /// # Safety
 /// `output` must point to at least `encode_size_hint(input.len(), wrap)`
 /// writable bytes.
-#[cfg(feature = "alloc")]
+#[deprecated(since = "0.3.0", note = "use `simd::encode_slice`")]
 pub unsafe fn encode_unchecked(
     input: &[u8],
     max_level: SimdLevel,
     wrap: usize,
     output: *mut u8,
 ) -> usize {
-    let encoded = encode(input, max_level, wrap);
-    debug_assert!(encoded.len() <= encode_size_hint(input.len(), wrap));
-    // SAFETY: the caller guarantees `output` has at least
-    // `encode_size_hint(input.len(), wrap)` writable bytes, and the size
-    // hint is an upper bound on `encode`'s output (tests/unchecked.rs).
-    core::ptr::copy_nonoverlapping(encoded.as_ptr(), output, encoded.len());
-    encoded.len()
+    let len = match encoded_len(input.len(), wrap) {
+        Ok(len) => len,
+        Err(e) => panic!("{e}"),
+    };
+    debug_assert!(len <= encode_size_hint(input.len(), wrap));
+    // SAFETY: the caller guarantees `encode_size_hint(input.len(), wrap)`
+    // writable bytes at `output`, an upper bound on `encoded_len` (tested);
+    // they are only written.
+    let out = unsafe { core::slice::from_raw_parts_mut(output.cast::<MaybeUninit<u8>>(), len) };
+    encode_uninit(input, max_level, wrap, out)
 }
 
 /// Decode into a caller-provided buffer without bounds checking.
 ///
-/// Auto-detects format: a leading `-` selects the SIMD path; otherwise falls
-/// back to Henke.  Returns bytes written.
-///
-/// Writes exactly what [`decode`] returns for the same arguments; empty
-/// input writes nothing and returns 0. It currently decodes into a
-/// temporary `Vec` and copies the result (one allocation per call); spec
-/// 0010 replaces this function with a slice-based API.
+/// Auto-detects the format as [`decode`] does. Returns the number of bytes
+/// written, or 0 for an invalid SIMD stream: use [`decode_slice`] to tell
+/// errors apart.
 ///
 /// # Safety
 /// `output` must point to at least `decode_size_hint(input.len())`
 /// writable bytes.
-#[cfg(feature = "alloc")]
+#[deprecated(since = "0.3.0", note = "use `simd::decode_slice`")]
 pub unsafe fn decode_unchecked(input: &[u8], max_level: SimdLevel, output: *mut u8) -> usize {
-    let decoded = decode(input, max_level).unwrap_or_default();
-    debug_assert!(decoded.len() <= decode_size_hint(input.len()));
-    // SAFETY: as in `encode_unchecked`, with `decode_size_hint`.
-    core::ptr::copy_nonoverlapping(decoded.as_ptr(), output, decoded.len());
-    decoded.len()
+    // SAFETY: the caller guarantees `decode_size_hint(input.len())` writable
+    // bytes at `output`; they are only written.
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            output.cast::<MaybeUninit<u8>>(),
+            decode_size_hint(input.len()),
+        )
+    };
+    decode_uninit(input, max_level, out).unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
 // Streaming encoder
 // ---------------------------------------------------------------------------
 
-/// Stateful SIMD fixed-width encoder (no line wrapping).
+/// Stateful SIMD fixed-width encoder, with line wrapping (spec 0008 §3.4,
+/// §3.6).
 ///
-/// Feed input with [`Encoder::encode`]; flush with [`Encoder::finish`].
-/// The `-` prefix is written with the first non-empty input, so an encoder
-/// that only sees empty input produces the empty stream, like [`encode`].
-#[cfg(feature = "alloc")]
+/// Feed input with [`Encoder::encode`] (or [`Encoder::encode_slice`]);
+/// flush with [`Encoder::finish`] (or [`Encoder::finish_slice`]). The
+/// output is exactly [`encode`]'s, however the input is split. The `-`
+/// prefix is written with the first non-empty input, so an encoder that
+/// only sees empty input produces the empty stream.
+#[derive(Clone, Debug)]
 pub struct Encoder {
     core: driver::EncodeCore,
 }
 
-#[cfg(feature = "alloc")]
 impl Encoder {
-    pub fn new(max_level: SimdLevel) -> Self {
-        Self {
-            core: driver::EncodeCore::new(effective_level(max_level), 0),
-        }
+    /// An encoder with line width `wrap`: 0, or a multiple of 32.
+    pub fn new(max_level: SimdLevel, wrap: usize) -> Result<Self, Error> {
+        check_width(wrap)?;
+        Ok(Self {
+            core: driver::EncodeCore::new(effective_level(max_level), wrap),
+        })
     }
 
     /// Encode `input`, appending SIMD-variant characters to `output`.
-    /// Writes the `-` prefix with the first non-empty input.
+    #[cfg(feature = "alloc")]
     pub fn encode(&mut self, input: &[u8], output: &mut Vec<u8>) {
-        output.reserve(driver::EncodeCore::capacity(input.len(), 0));
-        let n = self.core.encode(input, output.spare_capacity_mut());
+        let len = self.core.encode_len(input.len());
+        output.reserve(len);
+        let n = self
+            .core
+            .encode(input, &mut output.spare_capacity_mut()[..len]);
         // SAFETY: the core initialized the first `n` bytes of the spare
         // capacity.
         unsafe { output.set_len(output.len() + n) };
     }
 
-    /// Flush remaining bits (0–2 chars).
+    /// Encode `input` into `output`, and return the number of bytes written.
+    ///
+    /// `output` must hold the bytes this call writes (an exact size, known
+    /// from the state); otherwise nothing is written, the state is kept, and
+    /// the error gives the size.
+    pub fn encode_slice(&mut self, input: &[u8], output: &mut [u8]) -> Result<usize, Error> {
+        let needed = self.core.encode_len(input.len());
+        if output.len() < needed {
+            return Err(Error::BufferTooSmall { needed });
+        }
+        Ok(self
+            .core
+            .encode(input, &mut crate::as_uninit(output)[..needed]))
+    }
+
+    /// Flush the last characters and the final LF.
+    #[cfg(feature = "alloc")]
     pub fn finish(mut self, output: &mut Vec<u8>) {
-        output.reserve(driver::EncodeCore::capacity(0, 0));
-        let n = self.core.finish(output.spare_capacity_mut());
+        let len = self.core.finish_len();
+        output.reserve(len);
+        let n = self.core.finish(&mut output.spare_capacity_mut()[..len]);
         // SAFETY: as in `encode`.
         unsafe { output.set_len(output.len() + n) };
     }
-}
 
-#[cfg(feature = "alloc")]
-impl Default for Encoder {
-    fn default() -> Self {
-        Self::new(SimdLevel::default())
+    /// Flush the last characters and the final LF into `output`, return the
+    /// number of bytes written, and reset the encoder.
+    ///
+    /// `output` must hold the bytes to write; otherwise nothing is written,
+    /// the state is kept, and the error gives the size.
+    pub fn finish_slice(&mut self, output: &mut [u8]) -> Result<usize, Error> {
+        let needed = self.core.finish_len();
+        if output.len() < needed {
+            return Err(Error::BufferTooSmall { needed });
+        }
+        Ok(self.core.finish(&mut crate::as_uninit(output)[..needed]))
     }
 }
 
@@ -382,15 +498,19 @@ impl Default for Encoder {
 // ---------------------------------------------------------------------------
 
 /// Stateful decoder. Auto-detects the format (spec 0008 §2): after leading
-/// whitespace, `-` selects the SIMD variant, decoded strictly; anything else
-/// the Henke format.
-#[cfg(feature = "alloc")]
+/// whitespace, `-` selects the SIMD variant, decoded strictly (spec 0008
+/// §3.5); anything else the Henke format, which never fails.
+///
+/// The result is exactly [`decode`]'s, however the input is split: the same
+/// bytes, or the same error. Once it has reported an error, the decoder
+/// reports it again on every call.
+#[derive(Clone, Debug)]
 pub struct Decoder {
     max_level: SimdLevel,
     mode: DecoderMode,
 }
 
-#[cfg(feature = "alloc")]
+#[derive(Clone, Debug)]
 enum DecoderMode {
     /// Only whitespace so far; `offset` bytes of it.
     Undecided {
@@ -400,7 +520,6 @@ enum DecoderMode {
     Henke(crate::Decoder),
 }
 
-#[cfg(feature = "alloc")]
 impl Decoder {
     pub fn new(max_level: SimdLevel) -> Self {
         Self {
@@ -410,25 +529,83 @@ impl Decoder {
     }
 
     /// Decode `input`, appending bytes to `output`.
-    /// Returns `false` once the SIMD stream is invalid (spec 0008 §3.5).
-    pub fn decode(&mut self, input: &[u8], output: &mut Vec<u8>) -> bool {
-        self.decode_inner(input, output)
+    #[cfg(feature = "alloc")]
+    pub fn decode(&mut self, input: &[u8], output: &mut Vec<u8>) -> Result<(), Error> {
+        output.reserve(self.decode_len(input.len()));
+        let n = self.decode_uninit(input, output.spare_capacity_mut())?;
+        // SAFETY: `decode_uninit` initialized the first `n` bytes of the
+        // spare capacity.
+        unsafe { output.set_len(output.len() + n) };
+        Ok(())
     }
 
-    /// Flush the last bytes. An invalid SIMD stream (including an invalid
-    /// payload length, only known here) adds nothing.
-    pub fn finish(mut self, output: &mut Vec<u8>) {
-        self.finish_inner(output);
+    /// Decode `input` into `output`, and return the number of bytes written.
+    ///
+    /// `output` must hold at least `decode_size_hint(input.len() + 15)`
+    /// bytes (a smaller bound, known from the state, is enough; the error
+    /// gives it); otherwise nothing is written and the state is kept. After a
+    /// decoding error, the contents of `output` are unspecified.
+    pub fn decode_slice(&mut self, input: &[u8], output: &mut [u8]) -> Result<usize, Error> {
+        let needed = self.decode_len(input.len());
+        if output.len() < needed {
+            return Err(Error::BufferTooSmall { needed });
+        }
+        self.decode_uninit(input, crate::as_uninit(output))
     }
 
-    fn decode_inner(&mut self, input: &[u8], output: &mut Vec<u8>) -> bool {
+    /// Check the end of the stream (the last line, the payload length) and
+    /// flush the last bytes.
+    #[cfg(feature = "alloc")]
+    pub fn finish(mut self, output: &mut Vec<u8>) -> Result<(), Error> {
+        output.reserve(self.finish_len()?);
+        let n = self.finish_uninit(output.spare_capacity_mut())?;
+        // SAFETY: as in `decode`.
+        unsafe { output.set_len(output.len() + n) };
+        Ok(())
+    }
+
+    /// Check the end of the stream and flush the last bytes into `output`;
+    /// on success, return the number of bytes written and reset the decoder.
+    ///
+    /// `output` must hold the bytes to write; otherwise nothing is written,
+    /// the state is kept, and the error gives the size.
+    pub fn finish_slice(&mut self, output: &mut [u8]) -> Result<usize, Error> {
+        let needed = self.finish_len()?;
+        if output.len() < needed {
+            return Err(Error::BufferTooSmall { needed });
+        }
+        self.finish_uninit(crate::as_uninit(output))
+    }
+
+    /// Upper bound on what one `decode` call writes for `n` input bytes.
+    fn decode_len(&self, n: usize) -> usize {
+        match &self.mode {
+            // Whatever the format turns out to be, a fresh decoder writes
+            // at most this.
+            DecoderMode::Undecided { .. } => decode_size_hint(n),
+            DecoderMode::Simd(core) => core.decode_len(n),
+            DecoderMode::Henke(decoder) => decoder.decode_len(n),
+        }
+    }
+
+    /// Exactly what `finish` writes, or the error it reports.
+    fn finish_len(&self) -> Result<usize, Error> {
+        match &self.mode {
+            DecoderMode::Undecided { .. } => Ok(0),
+            DecoderMode::Simd(core) => core.finish_len(),
+            DecoderMode::Henke(decoder) => Ok(decoder.finish_len()),
+        }
+    }
+
+    /// Decoding core: `out` holds at least `decode_len(input.len())` bytes.
+    fn decode_uninit(&mut self, input: &[u8], out: &mut [MaybeUninit<u8>]) -> Result<usize, Error> {
         let mut input = input;
         if let DecoderMode::Undecided { offset } = self.mode {
             let Some(p) = input.iter().position(|&b| !driver::is_whitespace(b)) else {
                 self.mode = DecoderMode::Undecided {
                     offset: offset + input.len(),
                 };
-                return true;
+                return Ok(0);
             };
             if input[p] == b'-' {
                 let level = effective_level(self.max_level);
@@ -440,49 +617,25 @@ impl Decoder {
             }
         }
         match &mut self.mode {
-            DecoderMode::Undecided { .. } => true,
-            DecoderMode::Simd(core) => {
-                output.reserve(driver::DecodeCore::capacity(input.len()) + 16);
-                match core.decode(input, output.spare_capacity_mut()) {
-                    Ok(n) => {
-                        // SAFETY: the core initialized the first `n` bytes of
-                        // the spare capacity.
-                        unsafe { output.set_len(output.len() + n) };
-                        true
-                    }
-                    Err(_) => false,
-                }
-            }
-            DecoderMode::Henke(decoder) => {
-                decoder.decode(input, output);
-                true
-            }
+            DecoderMode::Undecided { .. } => Ok(0),
+            DecoderMode::Simd(core) => core.decode(input, out),
+            DecoderMode::Henke(decoder) => Ok(decoder.decode_uninit(input, out)),
         }
     }
 
-    fn finish_inner(&mut self, output: &mut Vec<u8>) -> bool {
-        match &mut self.mode {
-            DecoderMode::Undecided { .. } => true,
-            DecoderMode::Simd(core) => {
-                output.reserve(driver::DecodeCore::FINISH_CAPACITY);
-                match core.finish(output.spare_capacity_mut()) {
-                    Ok(n) => {
-                        // SAFETY: as in `decode_inner`.
-                        unsafe { output.set_len(output.len() + n) };
-                        true
-                    }
-                    Err(_) => false,
-                }
-            }
-            DecoderMode::Henke(decoder) => {
-                core::mem::take(decoder).finish(output);
-                true
-            }
-        }
+    /// Finishing core: `out` holds at least `finish_len()` bytes. Resets the
+    /// decoder on success.
+    fn finish_uninit(&mut self, out: &mut [MaybeUninit<u8>]) -> Result<usize, Error> {
+        let n = match &mut self.mode {
+            DecoderMode::Undecided { .. } => 0,
+            DecoderMode::Simd(core) => core.finish(out)?,
+            DecoderMode::Henke(decoder) => decoder.finish_uninit(out),
+        };
+        *self = Self::new(self.max_level);
+        Ok(n)
     }
 }
 
-#[cfg(feature = "alloc")]
 impl Default for Decoder {
     fn default() -> Self {
         Self::new(SimdLevel::default())
@@ -498,7 +651,7 @@ mod tests {
     use super::*;
 
     fn round_trip(input: &[u8]) -> Vec<u8> {
-        let encoded = encode(input, SimdLevel::default(), 0);
+        let encoded = encode(input, SimdLevel::default(), 0).unwrap();
         if !encoded.is_empty() {
             assert_eq!(encoded[0], b'-');
         }
@@ -507,8 +660,8 @@ mod tests {
 
     #[test]
     fn empty() {
-        assert_eq!(encode(b"", SimdLevel::default(), 0), b"");
-        assert_eq!(decode(b"", SimdLevel::default()), Some(vec![]));
+        assert_eq!(encode(b"", SimdLevel::default(), 0), Ok(vec![]));
+        assert_eq!(decode(b"", SimdLevel::default()), Ok(vec![]));
     }
 
     #[test]
@@ -529,26 +682,10 @@ mod tests {
     }
 
     #[test]
-    fn simd_matches_scalar() {
-        let input: Vec<u8> = (0u8..=255).cycle().take(10_000).collect();
-        let simd_encoded = encode(&input, SimdLevel::default(), 0);
-        let scalar_decoded = scalar::decode(&simd_encoded).expect("scalar decode failed");
-        assert_eq!(scalar_decoded, input);
-    }
-
-    #[test]
-    fn level_scalar_matches_scalar_module() {
-        let input: Vec<u8> = (0u8..=255).cycle().take(10_000).collect();
-        let a = encode(&input, SimdLevel::Scalar, 0);
-        let b = scalar::encode(&input);
-        assert_eq!(a, b);
-    }
-
-    #[test]
     fn all_levels_round_trip() {
         let input: Vec<u8> = (0u8..=255).cycle().take(10_000).collect();
         for level in [SimdLevel::Scalar, SimdLevel::Simd128, SimdLevel::Simd256] {
-            let encoded = encode(&input, level, 0);
+            let encoded = encode(&input, level, 0).unwrap();
             let decoded = decode(&encoded, level).expect("decode failed");
             assert_eq!(decoded, input, "round-trip failed for {level:?}");
         }
@@ -566,7 +703,7 @@ mod tests {
     #[test]
     fn simd_and_henke_are_different() {
         let input = b"Hello, world!";
-        let simd = encode(input, SimdLevel::default(), 0);
+        let simd = encode(input, SimdLevel::default(), 0).unwrap();
         let henke = crate::encode(input);
         assert_ne!(&simd[1..], henke.as_slice());
         assert_eq!(simd[0], b'-');
@@ -575,20 +712,117 @@ mod tests {
 
     #[test]
     fn encoder_chunk_boundaries() {
-        // Verify Encoder produces identical output regardless of chunk split,
-        // covering the carry-state bug where a fresh ScalarEncoder was created
-        // per encode() call, discarding bits from the previous tail.
         let input: Vec<u8> = (0u8..=255).cycle().take(10_000).collect();
-        let reference = encode(&input, SimdLevel::default(), 0);
-        for chunk_size in [1, 2, 7, 13, 14, 25, 26, 27, 64, 100, 256] {
-            let mut enc = Encoder::new(SimdLevel::default());
-            let mut out = Vec::new();
-            for chunk in input.chunks(chunk_size) {
-                enc.encode(chunk, &mut out);
+        for wrap in [0, 64] {
+            let reference = encode(&input, SimdLevel::default(), wrap).unwrap();
+            for chunk_size in [1, 2, 7, 13, 14, 25, 26, 27, 64, 100, 256] {
+                let mut enc = Encoder::new(SimdLevel::default(), wrap).unwrap();
+                let mut out = Vec::new();
+                for chunk in input.chunks(chunk_size) {
+                    enc.encode(chunk, &mut out);
+                }
+                enc.finish(&mut out);
+                assert_eq!(out, reference, "wrap={wrap}, chunk_size={chunk_size}");
             }
-            enc.finish(&mut out);
-            assert_eq!(out, reference, "chunk_size={chunk_size}");
         }
+    }
+
+    #[test]
+    fn invalid_widths_are_rejected() {
+        for wrap in [1, 16, 48, 76] {
+            let err = Error::InvalidWidth { width: wrap };
+            assert_eq!(encode(b"x", SimdLevel::default(), wrap), Err(err));
+            assert_eq!(encoded_len(1, wrap), Err(err));
+            assert_eq!(
+                encode_slice(b"x", SimdLevel::default(), wrap, &mut [0; 64]),
+                Err(err)
+            );
+            assert!(Encoder::new(SimdLevel::default(), wrap).is_err());
+        }
+    }
+
+    #[test]
+    fn slice_api_matches_vec_api() {
+        let input: Vec<u8> = (0u8..=255).cycle().take(3000).collect();
+        for wrap in [0, 32, 64] {
+            let encoded = encode(&input, SimdLevel::default(), wrap).unwrap();
+            let mut buf = vec![0u8; encoded_len(input.len(), wrap).unwrap()];
+            let n = encode_slice(&input, SimdLevel::default(), wrap, &mut buf).unwrap();
+            assert_eq!(&buf[..n], &encoded[..]);
+
+            let mut back = vec![0u8; decode_size_hint(encoded.len())];
+            let n = decode_slice(&encoded, SimdLevel::default(), &mut back).unwrap();
+            assert_eq!(&back[..n], &input[..]);
+        }
+    }
+
+    #[test]
+    fn buffer_too_small_writes_nothing() {
+        let input = b"Hello, world!";
+        let needed = encoded_len(input.len(), 0).unwrap();
+        let mut buf = vec![0xA5u8; needed - 1];
+        assert_eq!(
+            encode_slice(input, SimdLevel::default(), 0, &mut buf),
+            Err(Error::BufferTooSmall { needed })
+        );
+        assert!(buf.iter().all(|&b| b == 0xA5));
+
+        let encoded = encode(input, SimdLevel::default(), 0).unwrap();
+        let needed = decode_size_hint(encoded.len());
+        let mut buf = vec![0xA5u8; needed - 1];
+        assert_eq!(
+            decode_slice(&encoded, SimdLevel::default(), &mut buf),
+            Err(Error::BufferTooSmall { needed })
+        );
+        assert!(buf.iter().all(|&b| b == 0xA5));
+    }
+
+    #[test]
+    fn streaming_slice_api_keeps_state_on_buffer_too_small() {
+        let input: Vec<u8> = (0u8..=255).cycle().take(1000).collect();
+        let reference = encode(&input, SimdLevel::default(), 64).unwrap();
+
+        let mut enc = Encoder::new(SimdLevel::default(), 64).unwrap();
+        let mut out = Vec::new();
+        for chunk in input.chunks(100) {
+            // Too small first: nothing changes, then the right size.
+            assert!(matches!(
+                enc.encode_slice(chunk, &mut []),
+                Err(Error::BufferTooSmall { .. }) | Ok(0)
+            ));
+            let mut buf = [0u8; 256];
+            let n = enc.encode_slice(chunk, &mut buf).unwrap();
+            out.extend_from_slice(&buf[..n]);
+        }
+        let mut buf = [0u8; 8];
+        let n = enc.finish_slice(&mut buf).unwrap();
+        out.extend_from_slice(&buf[..n]);
+        assert_eq!(out, reference);
+
+        let mut dec = Decoder::new(SimdLevel::default());
+        let mut back = Vec::new();
+        for chunk in reference.chunks(37) {
+            if let Err(Error::BufferTooSmall { needed }) = dec.decode_slice(chunk, &mut []) {
+                assert!(needed > 0);
+            }
+            let mut buf = [0u8; 64];
+            let n = dec.decode_slice(chunk, &mut buf).unwrap();
+            back.extend_from_slice(&buf[..n]);
+        }
+        let mut buf = [0u8; 16];
+        let n = dec.finish_slice(&mut buf).unwrap();
+        back.extend_from_slice(&buf[..n]);
+        assert_eq!(back, input);
+    }
+
+    #[test]
+    fn decoder_reports_the_error_again() {
+        let mut dec = Decoder::new(SimdLevel::default());
+        let mut out = Vec::new();
+        let err = Err(Error::InvalidCharacter { offset: 3 });
+        assert_eq!(dec.decode(b"-##\"##", &mut out), err);
+        assert_eq!(dec.decode(b"####", &mut out), err);
+        assert_eq!(dec.finish(&mut out), err);
     }
 
     // -----------------------------------------------------------------------
@@ -657,15 +891,15 @@ mod tests {
     /// Two characters encoding the pair value `v` (low index first).
     fn pair(v: u32) -> [u8; 2] {
         [
-            scalar::enc_char((v % 91) as u8),
-            scalar::enc_char((v / 91) as u8),
+            driver::ALPHABET[(v % 91) as usize],
+            driver::ALPHABET[(v / 91) as usize],
         ]
     }
 
     #[test]
     fn kernels_reject_every_byte_outside_the_alphabet() {
         let input: Vec<u8> = (0u8..=255).cycle().take(26).collect();
-        let valid = encode(&input, SimdLevel::Scalar, 0);
+        let valid = encode(&input, SimdLevel::Scalar, 0).unwrap();
         for (name, width, kernel) in decode_kernels() {
             let block = &valid[1..1 + width];
             assert!(run(kernel, block), "{name}: valid block rejected");
@@ -685,7 +919,7 @@ mod tests {
     #[test]
     fn kernels_reject_pairs_above_8191() {
         let input: Vec<u8> = (0u8..=255).cycle().take(26).collect();
-        let valid = encode(&input, SimdLevel::Scalar, 0);
+        let valid = encode(&input, SimdLevel::Scalar, 0).unwrap();
         for (name, width, kernel) in decode_kernels() {
             let block = &valid[1..1 + width];
             for k in 0..width / 2 {

@@ -10,7 +10,7 @@
 //!       ./target/release/examples/enc_timing <path>
 //!
 //! <path> is one of:
-//!   henke_enc_unchecked  henke_enc_safe  henke_dec_unchecked  henke_dec_safe
+//!   henke_enc_slice  henke_enc_safe  henke_dec_slice  henke_dec_safe
 //!   scalar_enc  scalar_dec
 //!   simd128_enc  simd128_dec
 //!   simd256_enc  simd256_dec
@@ -31,16 +31,16 @@ fn main() {
 
     // Pre-build encoded buffers needed by decode paths.
     let henke_encoded = base91::encode(&input);
-    let simd_encoded = base91::simd::encode(&input, SimdLevel::default(), 0);
+    let simd_encoded = base91::simd::encode(&input, SimdLevel::default(), 0).unwrap();
 
     let enc_buf_len = base91::encode_size_hint(input.len());
     let dec_buf_len = base91::decode_size_hint(henke_encoded.len());
 
     match path.as_str() {
-        "henke_enc_unchecked" => {
+        "henke_enc_slice" => {
             let mut buf = vec![0u8; enc_buf_len];
             for _ in 0..REPS {
-                unsafe { base91::encode_unchecked(black_box(&input), buf.as_mut_ptr()) };
+                base91::encode_slice(black_box(&input), &mut buf).unwrap();
                 black_box(&buf);
             }
         }
@@ -49,10 +49,10 @@ fn main() {
                 black_box(base91::encode(black_box(&input)));
             }
         }
-        "henke_dec_unchecked" => {
+        "henke_dec_slice" => {
             let mut buf = vec![0u8; dec_buf_len];
             for _ in 0..REPS {
-                unsafe { base91::decode_unchecked(black_box(&henke_encoded), buf.as_mut_ptr()) };
+                base91::decode_slice(black_box(&henke_encoded), &mut buf).unwrap();
                 black_box(&buf);
             }
         }
@@ -63,53 +63,38 @@ fn main() {
         }
         "scalar_enc" => {
             for _ in 0..REPS {
-                black_box(base91::simd::encode(
-                    black_box(&input),
-                    SimdLevel::Scalar,
-                    0,
-                ));
+                black_box(base91::simd::encode(black_box(&input), SimdLevel::Scalar, 0).unwrap());
             }
         }
         "scalar_dec" => {
             for _ in 0..REPS {
-                black_box(base91::simd::decode(
-                    black_box(&simd_encoded),
-                    SimdLevel::Scalar,
-                ));
+                black_box(
+                    base91::simd::decode(black_box(&simd_encoded), SimdLevel::Scalar).unwrap(),
+                );
             }
         }
         "simd128_enc" => {
             for _ in 0..REPS {
-                black_box(base91::simd::encode(
-                    black_box(&input),
-                    SimdLevel::Simd128,
-                    0,
-                ));
+                black_box(base91::simd::encode(black_box(&input), SimdLevel::Simd128, 0).unwrap());
             }
         }
         "simd128_dec" => {
             for _ in 0..REPS {
-                black_box(base91::simd::decode(
-                    black_box(&simd_encoded),
-                    SimdLevel::Simd128,
-                ));
+                black_box(
+                    base91::simd::decode(black_box(&simd_encoded), SimdLevel::Simd128).unwrap(),
+                );
             }
         }
         "simd256_enc" => {
             for _ in 0..REPS {
-                black_box(base91::simd::encode(
-                    black_box(&input),
-                    SimdLevel::Simd256,
-                    0,
-                ));
+                black_box(base91::simd::encode(black_box(&input), SimdLevel::Simd256, 0).unwrap());
             }
         }
         "simd256_dec" => {
             for _ in 0..REPS {
-                black_box(base91::simd::decode(
-                    black_box(&simd_encoded),
-                    SimdLevel::Simd256,
-                ));
+                black_box(
+                    base91::simd::decode(black_box(&simd_encoded), SimdLevel::Simd256).unwrap(),
+                );
             }
         }
         other => {

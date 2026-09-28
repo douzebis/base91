@@ -51,10 +51,19 @@ Examples:
   b91enc < file.bin > file.b91          encode with no line wrapping
   b91dec < file.b91 > file.bin          decode
   base91 --simd file.bin > file.b91s    encode with SIMD variant
-  tar czf - dir/ | b91enc               encode tar stream"
+  tar czf - dir/ | b91enc               encode tar stream
+
+Exit status:
+  0 on success; 1 on an error, including an invalid SIMD stream when
+  decoding (the message names the error and its byte offset)."
 )]
 struct Cli {
     /// Decode data instead of encoding.
+    ///
+    /// The format is auto-detected. SIMD streams are checked strictly: a
+    /// byte outside the alphabet, a broken line layout or an invalid length
+    /// is an error, reported with its offset (exit status 1). Legacy streams
+    /// ignore bytes outside their alphabet, as the C reference does.
     #[arg(short = 'd', long)]
     decode: bool,
 
@@ -77,7 +86,8 @@ struct Cli {
     #[arg(short = 'v', long, action = clap::ArgAction::Count)]
     verbose: u8,
 
-    /// Wrap encoded lines after COLS characters (0 = no wrap; default 76).
+    /// Wrap encoded lines after COLS characters (0 = no wrap; default 76,
+    /// or 64 with --simd, where COLS must be a multiple of 32).
     /// Has no effect when decoding.
     #[arg(short = 'w', long, value_name = "COLS")]
     wrap: Option<usize>,
@@ -234,22 +244,28 @@ fn do_encode_simd(
 ) -> io::Result<(usize, usize)> {
     let ibuf_size = compute_ibuf_encode(buf_size);
     let mut ibuf = vec![0u8; ibuf_size];
-    let mut itotal: usize = usize::default();
+    let mut obuf = Vec::new();
+    let (mut itotal, mut ototal) = (0usize, 0usize);
 
-    // Buffer the entire input, then encode in one shot.
-    let mut raw: Vec<u8> = Vec::new();
+    // Streaming, wrapping included (spec 0010 §6): the output is the one-shot
+    // encoding's, in bounded memory.
+    let mut enc = base91::simd::Encoder::new(base91::simd::SimdLevel::default(), wrap)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     loop {
         let n = input.read(&mut ibuf)?;
         if n == 0 {
             break;
         }
         itotal += n;
-        raw.extend_from_slice(&ibuf[..n]);
+        obuf.clear();
+        enc.encode(&ibuf[..n], &mut obuf);
+        ototal += obuf.len();
+        output.write_all(&obuf)?;
     }
-    let encoded = base91::simd::encode(&raw, base91::simd::SimdLevel::default(), wrap);
-
-    let ototal = encoded.len();
-    output.write_all(&encoded)?;
+    obuf.clear();
+    enc.finish(&mut obuf);
+    ototal += obuf.len();
+    output.write_all(&obuf)?;
     Ok((itotal, ototal))
 }
 

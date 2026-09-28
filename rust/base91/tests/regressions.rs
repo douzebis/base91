@@ -13,7 +13,7 @@
 //! cargo test --test regressions -- --ignored --exact <name>
 //! ```
 
-use base91::simd::{self, scalar::ScalarDecoder, SimdLevel};
+use base91::simd::{self, SimdLevel};
 use base91_testkit::canary::Guarded;
 use base91_testkit::oracle;
 use base91_testkit::reader::PieceReader;
@@ -29,8 +29,12 @@ fn random(n: usize) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 // Spec 0005
 // ---------------------------------------------------------------------------
+//
+// These call the deprecated `*_unchecked` functions: they stay public until
+// 1.0, so they stay tested (spec 0010 §7).
 
 #[test]
+#[allow(deprecated)]
 fn unchecked_simd_encode_len_26_27_52() {
     for n in [26, 27, 52] {
         let x = random(n);
@@ -49,6 +53,7 @@ fn unchecked_simd_encode_len_26_27_52() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn unchecked_simd_decode_len_32_100() {
     for n in [32, 100] {
         let x = random(n);
@@ -64,6 +69,7 @@ fn unchecked_simd_decode_len_32_100() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn unchecked_simd_encode_empty() {
     for level in LEVELS {
         let mut out = Guarded::new(simd::encode_size_hint(0, 0));
@@ -85,9 +91,9 @@ fn simd_decoder_chunked_20k() {
     let mut decoder = simd::Decoder::new(SimdLevel::default());
     let mut got = Vec::new();
     for piece in stream.chunks(4096) {
-        assert!(decoder.decode(piece, &mut got));
+        decoder.decode(piece, &mut got).unwrap();
     }
-    decoder.finish(&mut got);
+    decoder.finish(&mut got).unwrap();
     assert!(got == x);
 }
 
@@ -103,25 +109,12 @@ fn io_reader_simd_20k() {
 }
 
 #[test]
-fn scalar_decoder_chunk_size_1() {
-    let x = random(20_000);
-    let stream = oracle::encode(&x, 0);
-    let mut decoder = ScalarDecoder::new();
-    let mut got = Vec::new();
-    for piece in stream[1..].chunks(1) {
-        decoder.decode(piece, &mut got);
-    }
-    decoder.finish(&mut got);
-    assert!(got == x);
-}
-
-#[test]
 fn simd_wrap_payload_fills_last_line() {
     // P(26) = 32 = W; P(52) = 64 = W (the CLI default width).
     for (n, width) in [(26, 32), (52, 64)] {
         let x = random(n);
         for level in LEVELS {
-            let got = simd::encode(&x, level, width);
+            let got = simd::encode(&x, level, width).unwrap();
             assert_eq!(
                 got,
                 oracle::encode(&x, width),
@@ -133,7 +126,7 @@ fn simd_wrap_payload_fills_last_line() {
 
 #[test]
 fn simd_streaming_encoder_empty() {
-    let mut encoder = simd::Encoder::new(SimdLevel::default());
+    let mut encoder = simd::Encoder::new(SimdLevel::default(), 0).unwrap();
     let mut got = Vec::new();
     encoder.encode(b"", &mut got);
     encoder.finish(&mut got);

@@ -172,7 +172,7 @@ fn simd_encode_unwrapped_matches_oracle() {
         let expected = oracle::encode(&x, 0);
         assert_eq!(expected.len(), oracle::encoded_len(x.len(), 0));
         for level in LEVELS {
-            let got = simd::encode(&x, level, 0);
+            let got = simd::encode(&x, level, 0).unwrap();
             assert!(got == expected, "{name}, {level:?}");
         }
     }
@@ -188,7 +188,7 @@ fn simd_encode_wrapped_matches_oracle() {
             }
             let expected = oracle::encode(&x, width);
             for level in LEVELS {
-                let got = simd::encode(&x, level, width);
+                let got = simd::encode(&x, level, width).unwrap();
                 assert!(got == expected, "{name}, W={width}, {level:?}");
             }
         }
@@ -206,7 +206,7 @@ fn simd_streaming_encoder_matches_oracle() {
         let expected = oracle::encode(&x, 0);
         for (plan, lengths) in chunkings(&mut rng, x.len()) {
             for level in LEVELS {
-                let mut encoder = simd::Encoder::new(level);
+                let mut encoder = simd::Encoder::new(level, 0).unwrap();
                 let mut got = Vec::new();
                 for piece in pieces(&x, &lengths) {
                     encoder.encode(piece, &mut got);
@@ -220,7 +220,7 @@ fn simd_streaming_encoder_matches_oracle() {
         if x.is_empty() && skipped.skip() {
             continue;
         }
-        let mut encoder = simd::Encoder::new(SimdLevel::default());
+        let mut encoder = simd::Encoder::new(SimdLevel::default(), 0).unwrap();
         let mut got = Vec::new();
         encoder.encode(b"", &mut got);
         encoder.encode(&x, &mut got);
@@ -241,10 +241,7 @@ fn simd_decode_valid_streams() {
             let stream = oracle::encode(&x, width);
             for level in LEVELS {
                 let got = simd::decode(&stream, level);
-                assert!(
-                    got.as_deref() == Some(&x[..]),
-                    "{name}, W={width}, {level:?}"
-                );
+                assert!(got.as_deref() == Ok(&x[..]), "{name}, W={width}, {level:?}");
             }
         }
     }
@@ -268,9 +265,9 @@ fn simd_streaming_decoder_on_valid_streams() {
                     let mut decoder = simd::Decoder::new(level);
                     let mut got = Vec::new();
                     for piece in pieces(&stream, &lengths) {
-                        assert!(decoder.decode(piece, &mut got), "{name}, {plan}");
+                        decoder.decode(piece, &mut got).unwrap();
                     }
-                    decoder.finish(&mut got);
+                    decoder.finish(&mut got).unwrap();
                     assert!(got == x, "{name}, W={width}, {plan}, {level:?}");
                 }
             }
@@ -310,7 +307,10 @@ fn io_reader_on_simd_streams() {
     }
 }
 
+// Calls the deprecated `*_unchecked` functions, public until 1.0 and so
+// still tested (spec 0010 §7).
 #[test]
+#[allow(deprecated)]
 fn simd_unchecked_matches_oracle() {
     let mut skipped = Skipped::new("simd_unchecked", Deviation::SimdUnchecked);
     let mut skipped_wrap = Skipped::new("simd_unchecked", Deviation::SimdWrappedEncoding);
@@ -358,7 +358,7 @@ mod legacy {
             // Auto-detection (spec 0008 §2): no `-`, so the legacy path.
             for level in LEVELS {
                 let got = simd::decode(&expected, level);
-                assert!(got.as_deref() == Some(&x[..]), "{name}, {level:?}");
+                assert!(got.as_deref() == Ok(&x[..]), "{name}, {level:?}");
             }
         }
     }
@@ -429,7 +429,9 @@ mod legacy {
         }
     }
 
+    // Calls the deprecated `*_unchecked` functions, as above.
     #[test]
+    #[allow(deprecated)]
     fn unchecked_matches_reference() {
         for (name, x) in inputs("legacy_unchecked") {
             let expected = reference::encode(&x);

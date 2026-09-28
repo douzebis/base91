@@ -44,13 +44,13 @@ fn edits() -> usize {
 /// Decodes `stream` with every SIMD-module decoder (all levels, one-shot,
 /// streaming in one chunk, io reader when it fits in one read) and returns
 /// the one-shot result at the default level.
-fn decode_all_ways(stream: &[u8]) -> Option<Vec<u8>> {
+fn decode_all_ways(stream: &[u8]) -> Result<Vec<u8>, base91::Error> {
     for level in LEVELS {
         let _ = simd::decode(stream, level);
         let mut decoder = simd::Decoder::new(level);
         let mut out = Vec::new();
         let _ = decoder.decode(stream, &mut out);
-        decoder.finish(&mut out);
+        let _ = decoder.finish(&mut out);
     }
     if stream.len() <= 8192 || !is_pending(Deviation::SimdStreamingDecoder) {
         let mut out = Vec::new();
@@ -93,7 +93,7 @@ fn mutated_simd_streams() {
                 // accepted streams can be compared.
                 if let Ok(expected) = oracle::decode(&m.stream) {
                     assert!(
-                        got.as_deref() == Some(&expected[..]),
+                        got.as_deref() == Ok(&expected[..]),
                         "n={n}, W={width}, {}",
                         m.name
                     );
@@ -135,7 +135,7 @@ fn mutated_legacy_streams() {
                 for level in LEVELS {
                     let got = simd::decode(&m.stream, level);
                     assert!(
-                        got.as_deref() == Some(&expected[..]),
+                        got.as_deref() == Ok(&expected[..]),
                         "n={n}, {}, {level:?}",
                         m.name
                     );

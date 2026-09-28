@@ -112,6 +112,8 @@ pub struct DecoderReader<R: Read> {
     // Read buffer for pulling from the inner reader.
     read_buf: Box<[u8; BUF_SIZE]>,
     done: bool,
+    // The error of an invalid SIMD stream, reported by every later read.
+    failed: Option<crate::Error>,
 }
 
 impl<R: Read> DecoderReader<R> {
@@ -124,6 +126,7 @@ impl<R: Read> DecoderReader<R> {
             decoded_pos: 0,
             read_buf: Box::new([0u8; BUF_SIZE]),
             done: false,
+            failed: None,
         }
     }
 
@@ -143,6 +146,9 @@ impl<R: Read> Read for DecoderReader<R> {
         // so it is returned only once the inner reader is exhausted and the
         // decoder flushed (spec 0006 §5c).
         while self.decoded_pos == self.decoded.len() {
+            if let Some(e) = self.failed {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, e));
+            }
             if self.done {
                 return Ok(0);
             }
@@ -154,14 +160,19 @@ impl<R: Read> Read for DecoderReader<R> {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) => return Err(e),
             };
-            if n == 0 {
+            let result = if n == 0 {
                 // Inner reader is exhausted: flush decoder state.
                 // Replace the decoder with a fresh default so we can take
                 // ownership of the old one (finish() consumes self).
-                core::mem::take(&mut self.decoder).finish(&mut self.decoded);
                 self.done = true;
+                core::mem::take(&mut self.decoder).finish(&mut self.decoded)
             } else {
-                self.decoder.decode(&self.read_buf[..n], &mut self.decoded);
+                self.decoder.decode(&self.read_buf[..n], &mut self.decoded)
+            };
+            // An invalid SIMD stream (spec 0008 §3.5): this read and every
+            // later one fail with it.
+            if let Err(e) = result {
+                self.failed = Some(e);
             }
         }
 
@@ -259,7 +270,7 @@ mod tests {
     /// several chunks (spec 0006 §6, bug 1).
     fn simd_stream(wrap: usize) -> (Vec<u8>, Vec<u8>) {
         let input: Vec<u8> = (0u8..=255).cycle().take(3 * BUF_SIZE).collect();
-        let encoded = crate::simd::encode(&input, crate::simd::SimdLevel::default(), wrap);
+        let encoded = crate::simd::encode(&input, crate::simd::SimdLevel::default(), wrap).unwrap();
         (input, encoded)
     }
 
@@ -268,9 +279,29 @@ mod tests {
         for wrap in [0, 64] {
             let (input, encoded) = simd_stream(wrap);
             let expected = crate::simd::decode(&encoded, crate::simd::SimdLevel::default());
-            assert_eq!(Some(decode_via_reader(&encoded)), expected, "wrap={wrap}");
+            assert_eq!(Ok(decode_via_reader(&encoded)), expected, "wrap={wrap}");
             assert_eq!(expected.unwrap(), input, "wrap={wrap}");
         }
+    }
+
+    #[test]
+    fn reader_reports_invalid_simd_streams() {
+        // The error surfaces after the bytes decoded before it, and on every
+        // later read.
+        let mut dec = DecoderReader::new(&b"-##################\"##"[..]);
+        let mut out = Vec::new();
+        let err = dec.read_to_end(&mut out).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let inner = err
+            .into_inner()
+            .unwrap()
+            .downcast::<crate::Error>()
+            .unwrap();
+        assert_eq!(*inner, crate::Error::InvalidCharacter { offset: 19 });
+        assert_eq!(
+            dec.read(&mut [0; 8]).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
