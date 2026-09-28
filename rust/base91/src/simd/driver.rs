@@ -102,12 +102,14 @@ fn put(out: &mut [MaybeUninit<u8>], w: &mut usize, b: u8) {
 // starts at `l · stride` (a line and its terminator); the raw side is
 // contiguous. See the batch entry points in `x86.rs` and `aarch64.rs`.
 
-/// Encodes a batch of blocks (13 bytes → 16 characters).
+/// Encodes a batch of blocks (13 bytes → 16 characters), each line
+/// followed by an LF when `terminate`.
 ///
 /// # Safety
 /// The kernels of `level` are available (see `effective_level`). `src` is
 /// readable for `13 n · lines + 3` bytes; every line's `16 n` bytes at
-/// `dst + l · stride` are writable.
+/// `dst + l · stride` are writable, and the byte after them when
+/// `terminate`.
 unsafe fn encode_run(
     level: ArchLevel,
     src: *const u8,
@@ -115,35 +117,47 @@ unsafe fn encode_run(
     stride: usize,
     n: usize,
     lines: usize,
+    terminate: bool,
 ) {
-    match level {
+    // Each batch function in two instances, with and without the LFs: no
+    // test in their line loop (spec 0011, §5).
+    match (level, terminate) {
         #[cfg(target_arch = "x86_64")]
-        ArchLevel::Avx2 => {
-            if n.is_multiple_of(2) {
-                x86::encode_lines_avx2(src, dst, stride, n / 2, lines);
-            } else {
-                // Odd blocks per line: only a single, partial line.
-                for l in 0..lines {
-                    let (src, dst) = (src.add(13 * n * l), dst.add(stride * l));
-                    x86::encode_lines_avx2(src, dst, 0, n / 2, 1);
-                    x86::encode_lines_sse41(src.add(13 * (n - 1)), dst.add(16 * (n - 1)), 0, 1, 1);
+        (ArchLevel::Avx2, _) if !n.is_multiple_of(2) => {
+            // Odd blocks per line: only a single, partial line.
+            for l in 0..lines {
+                let (src, dst) = (src.add(13 * n * l), dst.add(stride * l));
+                x86::encode_lines_avx2::<false>(src, dst, 0, n / 2, 1);
+                let (src, dst) = (src.add(13 * (n - 1)), dst.add(16 * (n - 1)));
+                if terminate {
+                    x86::encode_lines_sse41::<true>(src, dst, 0, 1, 1);
+                } else {
+                    x86::encode_lines_sse41::<false>(src, dst, 0, 1, 1);
                 }
             }
         }
         #[cfg(target_arch = "x86_64")]
-        ArchLevel::Sse41 => x86::encode_lines_sse41(src, dst, stride, n, lines),
+        (ArchLevel::Avx2, true) => x86::encode_lines_avx2::<true>(src, dst, stride, n / 2, lines),
+        #[cfg(target_arch = "x86_64")]
+        (ArchLevel::Avx2, false) => x86::encode_lines_avx2::<false>(src, dst, stride, n / 2, lines),
+        #[cfg(target_arch = "x86_64")]
+        (ArchLevel::Sse41, true) => x86::encode_lines_sse41::<true>(src, dst, stride, n, lines),
+        #[cfg(target_arch = "x86_64")]
+        (ArchLevel::Sse41, false) => x86::encode_lines_sse41::<false>(src, dst, stride, n, lines),
         #[cfg(target_arch = "aarch64")]
-        ArchLevel::Neon => aarch64::encode_lines_neon(src, dst, stride, n, lines),
-        ArchLevel::Scalar => {
+        (ArchLevel::Neon, true) => aarch64::encode_lines_neon::<true>(src, dst, stride, n, lines),
+        #[cfg(target_arch = "aarch64")]
+        (ArchLevel::Neon, false) => aarch64::encode_lines_neon::<false>(src, dst, stride, n, lines),
+        (ArchLevel::Scalar, _) => {
             for l in 0..lines {
+                let dst = dst.add(stride * l);
                 for i in 0..n {
                     let block = &*src.add(13 * (n * l + i)).cast::<[u8; 13]>();
                     let chars = encode_block_scalar(block);
-                    core::ptr::copy_nonoverlapping(
-                        chars.as_ptr(),
-                        dst.add(stride * l + 16 * i),
-                        16,
-                    );
+                    core::ptr::copy_nonoverlapping(chars.as_ptr(), dst.add(16 * i), 16);
+                }
+                if terminate {
+                    *dst.add(16 * n) = b'\n';
                 }
             }
         }
@@ -210,36 +224,37 @@ unsafe fn decode_run(
 const DECODE_SLACK: usize = 3;
 
 /// Encodes `lines` × `n` blocks from `src` (contiguous) to `out`, line `l`
-/// at `w + l · stride`.
+/// at `l · stride`, each followed by an LF when `terminate`.
 fn encode_blocks(
     level: ArchLevel,
     src: &[u8],
     out: &mut [MaybeUninit<u8>],
-    w: usize,
     stride: usize,
     n: usize,
     lines: usize,
+    terminate: bool,
 ) {
     let blocks = n * lines;
     assert!(n > 0 && lines > 0 && src.len() >= 13 * blocks);
-    assert!(out.len() >= w + stride * (lines - 1) + 16 * n);
-    let dst = out[w..].as_mut_ptr().cast::<u8>();
+    assert!(out.len() >= stride * (lines - 1) + 16 * n + usize::from(terminate));
+    let dst = out.as_mut_ptr().cast::<u8>();
     // SAFETY (all calls): `level` comes from `effective_level`; the writes
     // stay within `out` (checked above). The kernels load 3 bytes past each
     // block, which stays within `src` except for the very last block: when
     // `src` ends there, that block goes through a padded copy.
     unsafe {
         if src.len() >= 13 * blocks + 3 {
-            encode_run(level, src.as_ptr(), dst, stride, n, lines);
+            encode_run(level, src.as_ptr(), dst, stride, n, lines, terminate);
             return;
         }
         let last_line = dst.add(stride * (lines - 1));
-        encode_run(level, src.as_ptr(), dst, stride, n, lines - 1);
+        encode_run(level, src.as_ptr(), dst, stride, n, lines - 1, terminate);
         let tail = &src[13 * n * (lines - 1)..];
-        encode_run(level, tail.as_ptr(), last_line, 0, n - 1, 1);
+        encode_run(level, tail.as_ptr(), last_line, 0, n - 1, 1, false);
         let mut pad = [0u8; 16];
         pad[..13].copy_from_slice(&tail[13 * (n - 1)..13 * n]);
-        encode_run(level, pad.as_ptr(), last_line.add(16 * (n - 1)), 0, 1, 1);
+        let last = last_line.add(16 * (n - 1));
+        encode_run(level, pad.as_ptr(), last, 0, 1, 1, terminate);
     }
 }
 
@@ -448,34 +463,34 @@ impl EncodeCore {
         let mut blocks = (input.len() - i) / 13;
         while blocks > 0 {
             let per_line = self.wrap / 16;
-            let (n, lines) = if self.wrap > 0 && self.col == 0 && blocks >= per_line {
-                // Batches of about `BATCH` blocks, so that the LFs below go
-                // into lines still in the cache.
-                (per_line, (blocks / per_line).min((BATCH / per_line).max(1)))
-            } else if self.wrap > 0 {
-                (blocks.min((self.wrap - self.col) / 16), 1)
-            } else {
-                (blocks, 1)
-            };
             let stride = self.wrap + 1;
-            encode_blocks(self.level, &input[i..], out, w, stride, n, lines);
-            i += 13 * n * lines;
-            blocks -= n * lines;
-            if self.wrap == 0 {
-                w += 16 * n;
-            } else if self.col + 16 * n == self.wrap {
-                // The batch ends lines (whole ones after the first, since the
-                // first starts at `col`): an LF after each.
-                let first = self.wrap - self.col;
-                let lfs = &mut out[w + first..=w + first + stride * (lines - 1)];
-                for lf in lfs.iter_mut().step_by(stride) {
-                    lf.write(b'\n');
-                }
-                w += first + 1 + stride * (lines - 1);
-                self.col = 0;
+            if self.wrap > 0 && self.col == 0 && blocks >= per_line {
+                // Whole lines, in batches of about `BATCH` blocks; the
+                // kernels write each line's LF (spec 0011, §5).
+                let lines = (blocks / per_line).min((BATCH / per_line).max(1));
+                let out = &mut out[w..];
+                encode_blocks(self.level, &input[i..], out, stride, per_line, lines, true);
+                i += 13 * per_line * lines;
+                blocks -= per_line * lines;
+                w += stride * lines;
+                continue;
+            }
+            let n = if self.wrap > 0 {
+                blocks.min((self.wrap - self.col) / 16)
             } else {
-                w += 16 * n;
+                blocks
+            };
+            encode_blocks(self.level, &input[i..], &mut out[w..], stride, n, 1, false);
+            i += 13 * n;
+            blocks -= n;
+            w += 16 * n;
+            if self.wrap > 0 {
                 self.col += 16 * n;
+                if self.col == self.wrap {
+                    // The rest of a line: its LF.
+                    put(out, &mut w, b'\n');
+                    self.col = 0;
+                }
             }
         }
         for &b in &input[i..] {

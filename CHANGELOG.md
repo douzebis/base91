@@ -15,6 +15,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Performance
+
+- Wrapped SIMD encoding: each line's LF is written in the kernel's line
+  loop instead of a second pass, 3–5 % faster on a performance core,
+  2.6 % on an efficiency core (spec 0011, addendum).
+
 ---
 
 ## [0.3.1] - 2026-09-28

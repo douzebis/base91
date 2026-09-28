@@ -164,25 +164,31 @@ unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> (uint8x16_t, u
 // of line `l` at `l · stride`, the raw side contiguous.
 
 /// Encodes `lines` × `n` blocks of 13 bytes; line `l`'s characters go to
-/// `output + l · stride`.
+/// `output + l · stride`, followed by an LF when `TERMINATE`.
 ///
 /// # Safety
 /// `input` readable for `13 n · lines + 3` bytes (the kernel loads 16);
-/// every line's `16 n` output bytes writable.
+/// every line's `16 n` output bytes writable, and the byte after them when
+/// `TERMINATE`.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn encode_lines_neon(
+pub(crate) unsafe fn encode_lines_neon<const TERMINATE: bool>(
     input: *const u8,
     output: *mut u8,
     stride: usize,
     n: usize,
     lines: usize,
 ) {
-    for l in 0..lines {
-        let (src, dst) = (input.add(13 * n * l), output.add(stride * l));
+    let (mut src, mut dst) = (input, output);
+    for _ in 0..lines {
         for i in 0..n {
             encode_block_neon(src.add(13 * i), dst.add(16 * i));
         }
+        if TERMINATE {
+            *dst.add(16 * n) = b'\n';
+        }
+        src = src.add(13 * n);
+        dst = dst.wrapping_add(stride);
     }
 }
 

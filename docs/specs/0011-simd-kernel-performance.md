@@ -753,6 +753,34 @@ Simd128/Scalar 1.75 / 3.18 (was 1.15 / 1.76), wrapped/unwrapped 0.49 /
 0.59 (was 0.59 / 0.58: lower for encode, decision 5), Simd256/Simd128
 still capped at 0.90.
 
+### Addendum — LFs written in the encode line loop (2026-09-28)
+
+After 0.3.1, the per-line cost of wrapped encoding (decision 5) measured
+with host counters, performance core, 512 KiB, W = 64: about 24
+instructions and 4 branches per 64-column line for both kernels, but only
+3–4 cycles per line (IPC rises from 3.2 to 4.0); wrapped encoding costs
++18 % (AVX2) and +11 % (SSE4.1) in cycles. The rest of the gap in µs is
+the clock, which drops during wrapped AVX2 encoding (4.25 → 3.88 GHz).
+
+Change (§5, third candidate): the batch encoders write each line's LF in
+their line loop, a compile-time parameter (`encode_lines_*::<TERMINATE>`)
+selecting the instance, instead of a second pass over the lines in the
+driver. A runtime flag was tried first: LLVM kept the test inside the
+AVX2 line loop and recomputed each line's address (+2.6 instructions per
+line, no gain in cycles).
+
+Host counters, before → after, performance core: −4 instructions and
+−1.3 branches per line for both kernels; cycles −2.6 % (AVX2) and −3.2 %
+(SSE4.1); AVX2 branch misses +250 per run. Quick harness, medians of five
+rounds: wrapped encode −3.1 % (SSE4.1) and −4.7 % (AVX2) on the
+performance core, −2.6 % for both on the efficiency core; unwrapped
+encode unchanged.
+
+On the efficiency core, SSE4.1 encode runs at one of two speeds about
+11 % apart per process, wrapped or not, before and after the change
+(likely buffer placement): comparisons of the fastest rounds can mislead
+there; medians are reported with them since.
+
 ## Verification
 
 ```bash
