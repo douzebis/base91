@@ -6,15 +6,35 @@ SPDX-License-Identifier: MIT
 
 # 0002 — SIMD-accelerated basE91 variant with `--simd` flag
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** —
+**Implemented in:** 2026-03-29
 
 > **Superseded in part (0.3.0).** The wire format (*Wire format*,
 > *Alphabet*, *`--wrap` constraint*) is now specified normatively by
 > spec 0008, and the API (*Henke API*, *SIMD API*) by spec 0010. Those
 > sections are kept for history; where they disagree, specs 0008 and 0010
 > apply.
+>
+> **Closed (2026-09-28).** Implemented on 2026-03-29, released in 0.2.2; what later
+> specs changed:
+>
+> - The kernels' arithmetic (*SSE4.1 / AVX2 / NEON kernel*) is spec 0011's
+>   (0.3.1); the block structure and the dispatch are as described here,
+>   with the `force-scalar` feature, and compile-time selection without
+>   `std` (spec 0004).
+> - *Crate layout:* `simd/scalar.rs` was removed in 0.3.0 (the scalar
+>   level lives in the driver, spec 0010); `aarch64.rs` has NEON only.
+> - *CLI:* as described, the wrap width a multiple of 32 (spec 0008); the
+>   man page carries the compatibility note in the `--simd` entry, not in
+>   a separate COMPATIBILITY section.
+> - *Benchmarks:* the groups exist; the targets are met several times over
+>   (0.3.1, one performance core: AVX2 encode 12.7 GiB/s, decode
+>   16.5 GiB/s).
+> - *Open questions:* SIMD as the default format stays deferred; SVE2
+>   stays deferred (spec 0008 §3.4, spec 0011 *Non-goals*); the `enc_char`
+>   / `dec_char` peephole concerns scalar code that no longer exists in
+>   that form.
 
 ## Problem
 
