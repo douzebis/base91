@@ -52,6 +52,38 @@ const SHIFT91: i32 = 2;
 // Shared encode/decode helpers (compile for SSE4.1; safe to call from AVX2)
 // ---------------------------------------------------------------------------
 
+/// The constants of `encode_block_sse41`, built once per batch (spec 0011
+/// §3).
+#[cfg(target_arch = "x86_64")]
+struct EncodeSse41 {
+    gather: __m128i,
+    shifts: __m128i,
+    mask13: __m128i,
+    magic: __m128i,
+    low_byte: __m128i,
+    n91: __m128i,
+    base: __m128i,
+    gap: __m128i,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl EncodeSse41 {
+    #[target_feature(enable = "sse4.1,ssse3")]
+    #[inline]
+    unsafe fn new() -> Self {
+        Self {
+            gather: _mm_set_epi8(12, 11, 10, 9, 9, 8, 7, 6, 6, 5, 4, 3, 3, 2, 1, 0),
+            shifts: _mm_set_epi32(1, 4, 16, 64),
+            mask13: _mm_set1_epi32(0x1FFF_1FFF),
+            magic: _mm_set1_epi16(MAGIC91 as i16),
+            low_byte: _mm_set1_epi16(0x00FF),
+            n91: _mm_set1_epi16(91),
+            base: _mm_set1_epi8(0x23u8 as i8),
+            gap: _mm_set1_epi8(0x26u8 as i8),
+        }
+    }
+}
+
 /// Encode 13 input bytes into 16 SIMD-alphabet output characters.
 ///
 /// # Safety
@@ -61,7 +93,7 @@ const SHIFT91: i32 = 2;
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1,ssse3")]
 #[inline]
-unsafe fn encode_block_sse41(input: *const u8, output: *mut u8) {
+unsafe fn encode_block_sse41(k: &EncodeSse41, input: *const u8, output: *mut u8) {
     // Load 16 bytes (13 used, caller provides ≥16 readable bytes).
     let data = _mm_loadu_si128(input as *const __m128i);
 
@@ -76,13 +108,10 @@ unsafe fn encode_block_sse41(input: *const u8, output: *mut u8) {
     // low 16 bits and `>> 3` group 2k+1 in the high 16 bits: a blend picks
     // each half and an AND keeps 13 bits of each.
     // -----------------------------------------------------------------------
-    let gathered = _mm_shuffle_epi8(
-        data,
-        _mm_set_epi8(12, 11, 10, 9, 9, 8, 7, 6, 6, 5, 4, 3, 3, 2, 1, 0),
-    );
-    let aligned = _mm_mullo_epi32(gathered, _mm_set_epi32(1, 4, 16, 64));
+    let gathered = _mm_shuffle_epi8(data, k.gather);
+    let aligned = _mm_mullo_epi32(gathered, k.shifts);
     let halves = _mm_blend_epi16(_mm_srli_epi32(aligned, 6), _mm_srli_epi32(aligned, 3), 0xAA);
-    let vals = _mm_and_si128(halves, _mm_set1_epi32(0x1FFF_1FFF));
+    let vals = _mm_and_si128(halves, k.mask13);
     // vals = [g0,g1,g2,g3, g4,g5,g6,g7] as u16x8.
 
     // -----------------------------------------------------------------------
@@ -94,12 +123,12 @@ unsafe fn encode_block_sse41(input: *const u8, output: *mut u8) {
     // multiply-high into a 32-bit multiply of widened values (7 instructions
     // instead of 3, spec 0011).
     // -----------------------------------------------------------------------
-    let magic = _mm_set1_epi16(MAGIC91 as i16);
+    let magic = k.magic;
     let hi = _mm_and_si128(
         _mm_srli_epi32(_mm_mulhi_epu16(vals, magic), SHIFT91),
-        _mm_set1_epi16(0x00FF),
+        k.low_byte,
     );
-    let lo = _mm_sub_epi16(vals, _mm_mullo_epi16(hi, _mm_set1_epi16(91)));
+    let lo = _mm_sub_epi16(vals, _mm_mullo_epi16(hi, k.n91));
 
     // -----------------------------------------------------------------------
     // Step 3: Interleave lo/hi into output byte order [lo0,hi0,lo1,hi1,...].
@@ -116,13 +145,45 @@ unsafe fn encode_block_sse41(input: *const u8, output: *mut u8) {
     // Add 0x23 to all, then subtract the cmpgt mask (0xFF where > 0x26)
     // which is equivalent to adding 1 for those positions.
     // -----------------------------------------------------------------------
-    let base = _mm_set1_epi8(0x23u8 as i8);
+    let base = k.base;
     let chars = _mm_add_epi8(interleaved, base);
-    let threshold = _mm_set1_epi8(0x26u8 as i8);
+    let threshold = k.gap;
     let needs_bump = _mm_cmpgt_epi8(chars, threshold);
     let corrected = _mm_sub_epi8(chars, needs_bump);
 
     _mm_storeu_si128(output as *mut __m128i, corrected);
+}
+
+/// The constants of `decode_block_sse41`, built once per batch (spec 0011
+/// §3).
+#[cfg(target_arch = "x86_64")]
+struct DecodeSse41 {
+    gap: __m128i,
+    base: __m128i,
+    apos: __m128i,
+    pair_weights: __m128i,
+    field_weights: __m128i,
+    shifts: __m128i,
+    primary: __m128i,
+    secondary: __m128i,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl DecodeSse41 {
+    #[target_feature(enable = "sse4.1,ssse3")]
+    #[inline]
+    unsafe fn new() -> Self {
+        Self {
+            gap: _mm_set1_epi8(0x26u8 as i8),
+            base: _mm_set1_epi8(0x23u8 as i8),
+            apos: _mm_set1_epi8(0x27),
+            pair_weights: _mm_set1_epi16(91 << 8 | 1),
+            field_weights: _mm_set1_epi32(8192 << 16 | 1),
+            shifts: _mm_set_epi32(64, 16, 4, 1),
+            primary: _mm_set_epi8(-1, -1, -1, 15, 14, 13, 12, 10, 9, 8, 6, 5, 4, 2, 1, 0),
+            secondary: _mm_set_epi8(-1, -1, -1, -1, -1, -1, 11, -1, -1, 7, -1, -1, 3, -1, -1, -1),
+        }
+    }
 }
 
 /// Decode 16 SIMD-alphabet characters into 13 output bytes.
@@ -136,7 +197,11 @@ unsafe fn encode_block_sse41(input: *const u8, output: *mut u8) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1,ssse3")]
 #[inline]
-unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> (__m128i, __m128i) {
+unsafe fn decode_block_sse41(
+    k: &DecodeSse41,
+    input: *const u8,
+    output: *mut u8,
+) -> (__m128i, __m128i) {
     let chars = _mm_loadu_si128(input as *const __m128i);
 
     // -----------------------------------------------------------------------
@@ -149,9 +214,9 @@ unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> (__m128i, __m
     // But 0xFF = -1 in i8, so adding 0xFF subtracts 1. That's what we want!
     // index = (char - 0x23) + needs_bump  where needs_bump = 0xFF = -1 for bump lanes.
     // -----------------------------------------------------------------------
-    let threshold = _mm_set1_epi8(0x26u8 as i8);
+    let threshold = k.gap;
     let needs_bump = _mm_cmpgt_epi8(chars, threshold); // 0xFF (-1) where > 0x26
-    let raw = _mm_sub_epi8(chars, _mm_set1_epi8(0x23u8 as i8));
+    let raw = _mm_sub_epi8(chars, k.base);
     let indices8 = _mm_add_epi8(raw, needs_bump); // subtracts 1 where > 0x26
 
     // Validity (spec 0010 §5, spec 0011 §4): every byte outside 0x23–0x7E
@@ -159,7 +224,7 @@ unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> (__m128i, __m
     // `'` (0x27) maps to the index of `&`, so it is forced to 0xFF. The
     // batch keeps a running maximum of these and of the pair values, and
     // compares them with 90 and 8191 once.
-    let checked = _mm_or_si128(indices8, _mm_cmpeq_epi8(chars, _mm_set1_epi8(0x27)));
+    let checked = _mm_or_si128(indices8, _mm_cmpeq_epi8(chars, k.apos));
 
     // -----------------------------------------------------------------------
     // Step 2: Deinterleave and reconstruct 13-bit values.
@@ -171,7 +236,7 @@ unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> (__m128i, __m
     // times signed weights (1, 91), adjacent products summed into 16 bits.
     // At most 255 + 91 * 255 = 23460, so nothing saturates, even for bytes
     // outside the alphabet.
-    let vals = _mm_maddubs_epi16(indices8, _mm_set1_epi16(91 << 8 | 1));
+    let vals = _mm_maddubs_epi16(indices8, k.pair_weights);
 
     // -----------------------------------------------------------------------
     // Step 3: pack the eight 13-bit values into 13 bytes (spec 0011).
@@ -183,16 +248,10 @@ unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> (__m128i, __m
     // Bytes 3, 6 and 9 get a contribution from two fields: a second
     // shuffle brings the upper field's byte 3 and an OR merges it.
     // -----------------------------------------------------------------------
-    let fields = _mm_madd_epi16(vals, _mm_set1_epi32(8192 << 16 | 1));
-    let placed = _mm_mullo_epi32(fields, _mm_set_epi32(64, 16, 4, 1));
-    let primary = _mm_shuffle_epi8(
-        placed,
-        _mm_set_epi8(-1, -1, -1, 15, 14, 13, 12, 10, 9, 8, 6, 5, 4, 2, 1, 0),
-    );
-    let secondary = _mm_shuffle_epi8(
-        placed,
-        _mm_set_epi8(-1, -1, -1, -1, -1, -1, 11, -1, -1, 7, -1, -1, 3, -1, -1, -1),
-    );
+    let fields = _mm_madd_epi16(vals, k.field_weights);
+    let placed = _mm_mullo_epi32(fields, k.shifts);
+    let primary = _mm_shuffle_epi8(placed, k.primary);
+    let secondary = _mm_shuffle_epi8(placed, k.secondary);
     // Stores 16 bytes, of which 13 are data: the caller provides 3 bytes of
     // slack (see `decode_lines_sse41`).
     _mm_storeu_si128(output as *mut __m128i, _mm_or_si128(primary, secondary));
@@ -209,6 +268,41 @@ unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> (__m128i, __m
 // independently on each 128-bit lane — no cross-lane interaction — and the
 // shuffle constants are the SSE4.1 ones repeated in both lanes.
 
+/// The constants of `encode_block_avx2`, built once per batch (spec 0011
+/// §3).
+#[cfg(target_arch = "x86_64")]
+struct EncodeAvx2 {
+    gather: __m256i,
+    shifts: __m256i,
+    mask13: __m256i,
+    magic: __m256i,
+    low_byte: __m256i,
+    n91: __m256i,
+    base: __m256i,
+    gap: __m256i,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl EncodeAvx2 {
+    #[target_feature(enable = "avx2,ssse3")]
+    #[inline]
+    unsafe fn new() -> Self {
+        Self {
+            gather: _mm256_set_epi8(
+                12, 11, 10, 9, 9, 8, 7, 6, 6, 5, 4, 3, 3, 2, 1, 0, // high lane
+                12, 11, 10, 9, 9, 8, 7, 6, 6, 5, 4, 3, 3, 2, 1, 0, // low lane
+            ),
+            shifts: _mm256_set_epi32(0, 2, 4, 6, 0, 2, 4, 6),
+            mask13: _mm256_set1_epi32(0x1FFF_1FFF),
+            magic: _mm256_set1_epi16(MAGIC91 as i16),
+            low_byte: _mm256_set1_epi16(0x00FF),
+            n91: _mm256_set1_epi16(91),
+            base: _mm256_set1_epi8(0x23u8 as i8),
+            gap: _mm256_set1_epi8(0x26u8 as i8),
+        }
+    }
+}
+
 /// Encode 26 input bytes into 32 SIMD-alphabet output characters.
 ///
 /// # Safety
@@ -216,7 +310,7 @@ unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> (__m128i, __m
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,ssse3")]
 #[inline]
-unsafe fn encode_block_avx2(input: *const u8, output: *mut u8) {
+unsafe fn encode_block_avx2(k: &EncodeAvx2, input: *const u8, output: *mut u8) {
     // Load the two 13-byte blocks into the low and high 128-bit lanes
     // independently.  A single 256-bit load would place block1 at an offset
     // of 13 bytes into the high lane, misaligning it relative to the shuffle
@@ -230,28 +324,22 @@ unsafe fn encode_block_avx2(input: *const u8, output: *mut u8) {
     // Step 1: unpack each lane's 13 bytes into eight 13-bit values, as in
     // `encode_block_sse41`, with a real per-lane shift (`vpsllvd`) instead
     // of the multiply. The shuffle works lane by lane.
-    let gathered = _mm256_shuffle_epi8(
-        data,
-        _mm256_set_epi8(
-            12, 11, 10, 9, 9, 8, 7, 6, 6, 5, 4, 3, 3, 2, 1, 0, // high lane
-            12, 11, 10, 9, 9, 8, 7, 6, 6, 5, 4, 3, 3, 2, 1, 0, // low lane
-        ),
-    );
-    let aligned = _mm256_sllv_epi32(gathered, _mm256_set_epi32(0, 2, 4, 6, 0, 2, 4, 6));
+    let gathered = _mm256_shuffle_epi8(data, k.gather);
+    let aligned = _mm256_sllv_epi32(gathered, k.shifts);
     let halves = _mm256_blend_epi16(
         _mm256_srli_epi32(aligned, 6),
         _mm256_srli_epi32(aligned, 3),
         0xAA,
     );
-    let vals = _mm256_and_si256(halves, _mm256_set1_epi32(0x1FFF_1FFF));
+    let vals = _mm256_and_si256(halves, k.mask13);
 
     // Step 2: Divide by 91, the shift unfused as in `encode_block_sse41`.
-    let magic = _mm256_set1_epi16(MAGIC91 as i16);
+    let magic = k.magic;
     let hi = _mm256_and_si256(
         _mm256_srli_epi32(_mm256_mulhi_epu16(vals, magic), SHIFT91),
-        _mm256_set1_epi16(0x00FF),
+        k.low_byte,
     );
-    let lo = _mm256_sub_epi16(vals, _mm256_mullo_epi16(hi, _mm256_set1_epi16(91)));
+    let lo = _mm256_sub_epi16(vals, _mm256_mullo_epi16(hi, k.n91));
 
     // Step 3: Interleave lo/hi → [lo0,hi0,lo1,hi1,...].
     let lo8 = _mm256_packus_epi16(lo, lo);
@@ -259,13 +347,51 @@ unsafe fn encode_block_avx2(input: *const u8, output: *mut u8) {
     let interleaved = _mm256_unpacklo_epi8(lo8, hi8);
 
     // Step 4: Map to SIMD-alphabet.
-    let base = _mm256_set1_epi8(0x23u8 as i8);
+    let base = k.base;
     let chars = _mm256_add_epi8(interleaved, base);
-    let threshold = _mm256_set1_epi8(0x26u8 as i8);
+    let threshold = k.gap;
     let needs_bump = _mm256_cmpgt_epi8(chars, threshold);
     let corrected = _mm256_sub_epi8(chars, needs_bump);
 
     _mm256_storeu_si256(output as *mut __m256i, corrected);
+}
+
+/// The constants of `decode_block_avx2`, built once per batch (spec 0011
+/// §3).
+#[cfg(target_arch = "x86_64")]
+struct DecodeAvx2 {
+    gap: __m256i,
+    base: __m256i,
+    apos: __m256i,
+    pair_weights: __m256i,
+    field_weights: __m256i,
+    shifts: __m256i,
+    primary: __m256i,
+    secondary: __m256i,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl DecodeAvx2 {
+    #[target_feature(enable = "avx2,ssse3")]
+    #[inline]
+    unsafe fn new() -> Self {
+        Self {
+            gap: _mm256_set1_epi8(0x26u8 as i8),
+            base: _mm256_set1_epi8(0x23u8 as i8),
+            apos: _mm256_set1_epi8(0x27),
+            pair_weights: _mm256_set1_epi16(91 << 8 | 1),
+            field_weights: _mm256_set1_epi32(8192 << 16 | 1),
+            shifts: _mm256_set_epi32(6, 4, 2, 0, 6, 4, 2, 0),
+            primary: _mm256_set_epi8(
+                -1, -1, -1, 15, 14, 13, 12, 10, 9, 8, 6, 5, 4, 2, 1, 0, // high lane
+                -1, -1, -1, 15, 14, 13, 12, 10, 9, 8, 6, 5, 4, 2, 1, 0, // low lane
+            ),
+            secondary: _mm256_set_epi8(
+                -1, -1, -1, -1, -1, -1, 11, -1, -1, 7, -1, -1, 3, -1, -1, -1, // high lane
+                -1, -1, -1, -1, -1, -1, 11, -1, -1, 7, -1, -1, 3, -1, -1, -1, // low lane
+            ),
+        }
+    }
 }
 
 /// Decode 32 SIMD-alphabet characters into 26 output bytes (two blocks).
@@ -278,41 +404,33 @@ unsafe fn encode_block_avx2(input: *const u8, output: *mut u8) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,ssse3")]
 #[inline]
-unsafe fn decode_block_avx2(input: *const u8, output: *mut u8) -> (__m256i, __m256i) {
+unsafe fn decode_block_avx2(
+    k: &DecodeAvx2,
+    input: *const u8,
+    output: *mut u8,
+) -> (__m256i, __m256i) {
     let chars = _mm256_loadu_si256(input as *const __m256i);
 
     // Step 1: Reverse map characters → indices 0–90.
-    let threshold = _mm256_set1_epi8(0x26u8 as i8);
+    let threshold = k.gap;
     let needs_bump = _mm256_cmpgt_epi8(chars, threshold);
-    let raw = _mm256_sub_epi8(chars, _mm256_set1_epi8(0x23u8 as i8));
+    let raw = _mm256_sub_epi8(chars, k.base);
     let indices8 = _mm256_add_epi8(raw, needs_bump);
 
     // Validity: as in `decode_block_sse41`.
-    let checked = _mm256_or_si256(indices8, _mm256_cmpeq_epi8(chars, _mm256_set1_epi8(0x27)));
+    let checked = _mm256_or_si256(indices8, _mm256_cmpeq_epi8(chars, k.apos));
 
     // Step 2: Deinterleave and reconstruct 13-bit values.
     // val = lo + 91 * hi, as in `decode_block_sse41` (each 128-bit lane).
-    let vals = _mm256_maddubs_epi16(indices8, _mm256_set1_epi16(91 << 8 | 1));
+    let vals = _mm256_maddubs_epi16(indices8, k.pair_weights);
 
     // Step 3: pack each lane's eight 13-bit values into 13 bytes, as in
     // `decode_block_sse41`, with a real per-lane shift (`vpsllvd`) instead
     // of the multiply. The shuffles work lane by lane.
-    let fields = _mm256_madd_epi16(vals, _mm256_set1_epi32(8192 << 16 | 1));
-    let placed = _mm256_sllv_epi32(fields, _mm256_set_epi32(6, 4, 2, 0, 6, 4, 2, 0));
-    let primary = _mm256_shuffle_epi8(
-        placed,
-        _mm256_set_epi8(
-            -1, -1, -1, 15, 14, 13, 12, 10, 9, 8, 6, 5, 4, 2, 1, 0, // high lane
-            -1, -1, -1, 15, 14, 13, 12, 10, 9, 8, 6, 5, 4, 2, 1, 0, // low lane
-        ),
-    );
-    let secondary = _mm256_shuffle_epi8(
-        placed,
-        _mm256_set_epi8(
-            -1, -1, -1, -1, -1, -1, 11, -1, -1, 7, -1, -1, 3, -1, -1, -1, // high lane
-            -1, -1, -1, -1, -1, -1, 11, -1, -1, 7, -1, -1, 3, -1, -1, -1, // low lane
-        ),
-    );
+    let fields = _mm256_madd_epi16(vals, k.field_weights);
+    let placed = _mm256_sllv_epi32(fields, k.shifts);
+    let primary = _mm256_shuffle_epi8(placed, k.primary);
+    let secondary = _mm256_shuffle_epi8(placed, k.secondary);
     let packed = _mm256_or_si256(primary, secondary);
     // Two 16-byte stores of 13 data bytes each: the second one ends 3 bytes
     // past the unit's 26 (see `decode_lines_avx2`).
@@ -349,10 +467,11 @@ pub(crate) unsafe fn encode_lines_sse41(
     n: usize,
     lines: usize,
 ) {
+    let k = EncodeSse41::new();
     for l in 0..lines {
         let (src, dst) = (input.add(13 * n * l), output.add(stride * l));
         for i in 0..n {
-            encode_block_sse41(src.add(13 * i), dst.add(16 * i));
+            encode_block_sse41(&k, src.add(13 * i), dst.add(16 * i));
         }
     }
 }
@@ -371,10 +490,11 @@ pub(crate) unsafe fn encode_lines_avx2(
     n: usize,
     lines: usize,
 ) {
+    let k = EncodeAvx2::new();
     for l in 0..lines {
         let (src, dst) = (input.add(26 * n * l), output.add(stride * l));
         for i in 0..n {
-            encode_block_avx2(src.add(26 * i), dst.add(32 * i));
+            encode_block_avx2(&k, src.add(26 * i), dst.add(32 * i));
         }
     }
 }
@@ -408,14 +528,16 @@ pub(crate) unsafe fn decode_lines_sse41(
     n: usize,
     lines: usize,
 ) -> bool {
+    let k = DecodeSse41::new();
     // Running maximums over the whole batch, one validity test at the end.
-    // Nested loops: chosen by measurement, the flat loop of
-    // `decode_lines_avx2` being 7–19 % slower here (spec 0011, stage 3).
+    // Nested loops, the structure of every batch function: a flat loop pays
+    // a line counter per block, 15–19 % here; one call per line pays up to
+    // 41 % on short lines (spec 0011, G3).
     let (mut max_index, mut max_value) = (_mm_setzero_si128(), _mm_setzero_si128());
     for l in 0..lines {
         let (src, dst) = (input.add(stride * l), output.add(13 * n * l));
         for i in 0..n {
-            let (checked, vals) = decode_block_sse41(src.add(16 * i), dst.add(13 * i));
+            let (checked, vals) = decode_block_sse41(&k, src.add(16 * i), dst.add(13 * i));
             max_index = _mm_max_epu8(max_index, checked);
             max_value = _mm_max_epu16(max_value, vals);
         }
@@ -437,25 +559,15 @@ pub(crate) unsafe fn decode_lines_avx2(
     n: usize,
     lines: usize,
 ) -> bool {
-    // One flat loop, skipping each terminator at the end of a line, and
-    // running maximums over the whole batch. Chosen by measurement with the
-    // former kernel (nested loops up to 24 % slower on an efficiency core);
-    // SSE4.1 measures the other way (`decode_lines_sse41`). See spec 0011,
-    // "Code-generation sensitivity"; to be re-checked for G3.
-    let skip = stride.wrapping_sub(32 * n);
-    let (mut src, mut dst) = (input, output);
-    let mut left = n;
+    // As `decode_lines_sse41`.
+    let k = DecodeAvx2::new();
     let (mut max_index, mut max_value) = (_mm256_setzero_si256(), _mm256_setzero_si256());
-    for _ in 0..n * lines {
-        let (checked, vals) = decode_block_avx2(src, dst);
-        max_index = _mm256_max_epu8(max_index, checked);
-        max_value = _mm256_max_epu16(max_value, vals);
-        src = src.add(32);
-        dst = dst.add(26);
-        left -= 1;
-        if left == 0 {
-            src = src.wrapping_add(skip);
-            left = n;
+    for l in 0..lines {
+        let (src, dst) = (input.add(stride * l), output.add(26 * n * l));
+        for i in 0..n {
+            let (checked, vals) = decode_block_avx2(&k, src.add(32 * i), dst.add(26 * i));
+            max_index = _mm256_max_epu8(max_index, checked);
+            max_value = _mm256_max_epu16(max_value, vals);
         }
     }
     valid_sse41(
