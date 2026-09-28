@@ -551,6 +551,45 @@ the efficiency core (923 against 924 µs), not the +12 % measured before;
 the difference is within the clock variation above, not confirmed by
 cycle counts.
 
+### Stage 3 — Encoders (2026-09-28)
+
+The encoders' unpacking mirrors the decoders' packing (stage 3, changes 4
+and 5): one byte shuffle gathers bytes 3k..3k+3 into 32-bit lane k, a
+per-lane left shift by 6 − 2k (a multiply on SSE4.1, `vpsllvd` on AVX2)
+aligns the four 26-bit fields on bits 6..31, and two shifts, a blend and
+an AND split them into the eight 13-bit values. It replaces 2 shuffles,
+7 shifts, 6 blends, 2 ANDs and a pack.
+
+The assembly showed a second cost, older than this change: LLVM fuses the
+division's multiply-high (`_mm_mulhi_epu16`) and the 16-bit shift after
+it into a 32-bit multiply of widened values: 7 instructions instead of 2,
+and on AVX2 two cross-lane ones (`vextracti128`, `vpermq`). Scaling the
+values so that their top bits carry data does not prevent it (LLVM then
+uses `pmulld`). A 32-bit shift followed by a mask does: 3 instructions
+(`pmulhw`, `psrld`, `pand`). The loop is now 22 instructions per block
+(SSE4.1) and 20 per unit of two blocks (AVX2).
+
+Quick harness (§1), five alternating rounds, fastest round, each change
+against the tree before it:
+
+| # | Change | performance core, W = 0 / 64 | efficiency core, W = 0 / 64 |
+|---|---|---|---|
+| 1 | SSE4.1 unpacking | −17 / −14 % | −20 / −20 % |
+| 2 | SSE4.1 division unfused | −21 / −16 % | −20 / −18 % |
+| 3 | AVX2 unpacking | −17 / −16 % | −15 / −14 % |
+| 4 | AVX2 division unfused | −27 / −29 % | −28 / −27 % |
+
+Result against the legacy-decoder commit, same harness:
+
+| Encode | performance core | efficiency core |
+|---|---|---|
+| SSE4.1, W = 0 / 64 | 102.4 → 69.8 µs (−32 %) / 114.3 → 80.2 µs (−30 %) | 161.2 → 103.9 µs (−36 %) / 168.5 → 110.6 µs (−34 %) |
+| AVX2, W = 0 / 64 | 58.9 → 35.6 µs (−40 %) / 66.1 → 39.9 µs (−40 %) | 158.5 → 97.0 µs (−39 %) / 164.4 → 103.8 µs (−37 %) |
+
+Decoding, unchanged, measured as a control: within 0.2 % on the
+efficiency core; on the performance core +5.6 % once, −0.2 % when re-run
+(the clock variation of §1). NEON is not changed yet.
+
 ## Verification
 
 ```bash
