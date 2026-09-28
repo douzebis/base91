@@ -71,6 +71,18 @@ const TAIL_BYTES: [Option<usize>; 16] = [
 /// re-read byte by byte, so this also bounds that work.
 const BATCH: usize = 64;
 
+/// Blocks per batch of whole wrapped lines (decode). Larger than `BATCH`:
+/// such a batch holds only complete lines followed by their terminators,
+/// so it fails only on invalid input, and the per-batch driver work is
+/// spread over more lines (spec 0011, stage 2).
+const LINE_BATCH: usize = 256;
+
+/// First batch of a wrapped stream's first line, in blocks: W is unknown
+/// until the first terminator, and the batch holding it fails and is
+/// re-read byte by byte. Starting small and doubling bounds that re-read
+/// to about twice the line (spec 0011, stage 2).
+const FIRST_LINE_PROBE: usize = 2;
+
 pub(crate) fn is_whitespace(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\r' | b'\n')
 }
@@ -437,7 +449,9 @@ impl EncodeCore {
         while blocks > 0 {
             let per_line = self.wrap / 16;
             let (n, lines) = if self.wrap > 0 && self.col == 0 && blocks >= per_line {
-                (per_line, blocks / per_line)
+                // Batches of about `BATCH` blocks, so that the LFs below go
+                // into lines still in the cache.
+                (per_line, (blocks / per_line).min((BATCH / per_line).max(1)))
             } else if self.wrap > 0 {
                 (blocks.min((self.wrap - self.col) / 16), 1)
             } else {
@@ -453,8 +467,9 @@ impl EncodeCore {
                 // The batch ends lines (whole ones after the first, since the
                 // first starts at `col`): an LF after each.
                 let first = self.wrap - self.col;
-                for l in 0..lines {
-                    out[w + first + stride * l].write(b'\n');
+                let lfs = &mut out[w + first..=w + first + stride * (lines - 1)];
+                for lf in lfs.iter_mut().step_by(stride) {
+                    lf.write(b'\n');
                 }
                 w += first + 1 + stride * (lines - 1);
                 self.col = 0;
@@ -558,6 +573,8 @@ pub(crate) struct DecodeCore {
     /// Offset of the pending pair's first character.
     pair_offset: usize,
     payload_len: usize,
+    /// Blocks in the next first-line batch of a wrapped stream.
+    probe: usize,
 }
 
 impl DecodeCore {
@@ -578,6 +595,7 @@ impl DecodeCore {
             carry_len: 0,
             pair_offset: 0,
             payload_len: 0,
+            probe: FIRST_LINE_PROBE,
         }
     }
 
@@ -722,7 +740,7 @@ impl DecodeCore {
             // the next turn), up to a batch.
             let (n, lines, stride) = if known && self.line == 0 {
                 let (per_line, stride) = (self.width / 16, self.width + t.len());
-                let max_lines = (BATCH / per_line).max(1);
+                let max_lines = (LINE_BATCH / per_line).max(1);
                 let mut lines = 0;
                 while lines < max_lines
                     && i + stride * lines + self.width <= input.len()
@@ -734,6 +752,9 @@ impl DecodeCore {
             } else {
                 let room = if known {
                     (self.width - self.line) / 16
+                } else if !t.is_empty() {
+                    // The first line of a wrapped stream (W unknown).
+                    self.probe
                 } else {
                     usize::MAX
                 };
@@ -745,6 +766,9 @@ impl DecodeCore {
             let span = stride * (lines - 1) + 16 * n;
             let batch = &input[i..i + span];
             if decode_blocks(self.level, batch, stride, out, *w, n, lines) {
+                if !known {
+                    self.probe = (2 * self.probe).min(BATCH);
+                }
                 i += span;
                 *w += 13 * n * lines;
                 self.offset += span;

@@ -157,7 +157,11 @@ made this way:
   build, test or Nix job runs until the measurement ends.
 - **A/B comparisons alternate** over three rounds; results are reported
   as lowest–highest, not as a single figure.
-- `criterion` (`benches/throughput.rs`, 1 MiB) for absolute numbers;
+- **While iterating, rounds of seconds, not minutes:**
+  `examples/quick_bench.rs` (the `perf_sanity` method: 512 KiB, the
+  fastest of 101 runs, no allocation in the timed region, only the paths
+  under study; a full table in under a second), five alternating rounds.
+  `criterion` (`benches/throughput.rs`, 1 MiB) only to confirm a result;
   `perf_sanity` for ratios; `perf record` / `perf annotate` for where the
   time goes; `llvm-mca` on the kernel loops for port pressure, when the
   profile alone does not explain a difference.
@@ -357,6 +361,73 @@ nothing over unwrapped (SSE4.1 168 against 166 µs, AVX2 132 against
   smaller streams).
 - Encode: the driver's loop that writes one LF per line after the kernel
   call, bounds-checked (14.6 %).
+
+#### Efficiency core
+
+`taskset -c 4`, vCPUs 5–7 idle, same trees and method. The spread between
+rounds is mostly under 1 %.
+
+| Bench | (a) flat | (b) out of line | (c) nested | spread |
+|---|---|---|---|---|
+| encode, scalar | 808–823 µs | 771–785 µs | 807–808 µs | 5.2 % |
+| encode, SSE4.1 | 332 µs | 334–335 µs | 333–334 µs | 0.7 % |
+| encode, AVX2 | 329 µs | 328–329 µs | 327–328 µs | 0.4 % |
+| decode, scalar | 990–992 µs | 837–844 µs | 835–836 µs | 18.6 % |
+| decode, SSE4.1 | 269 µs | 272–274 µs | 267 µs | 2.3 % |
+| decode, AVX2 | 243–246 µs | 252–254 µs | 303–305 µs | 24.0 % |
+| encode W = 64, scalar | 850–872 µs | 802–811 µs | 807–812 µs | 7.1 % |
+| encode W = 64, SSE4.1 | 363–364 µs | 364–367 µs | 366–367 µs | 0.8 % |
+| encode W = 64, AVX2 | 359–360 µs | 381–382 µs | 357 µs | 7.0 % |
+| decode W = 64, scalar | 1019–1021 µs | 895 µs | 881–885 µs | 15.6 % |
+| decode W = 64, SSE4.1 | 297–298 µs | 307–308 µs | 297 µs | 3.6 % |
+| decode W = 64, AVX2 | 274 µs | 302–304 µs | 334–335 µs | 22.1 % |
+
+On an efficiency core, AVX2 decoding is the most sensitive (24 %, the
+nested loop the slowest), then the scalar decoder. The "twice as slow"
+SSE4.1 case of spec 0010 does not reproduce with the cluster idle.
+
+| Decode | full checks | without 8191 | range only | no checks | cost |
+|---|---|---|---|---|---|
+| scalar | 836–839 µs | 716–718 µs | 717–719 µs | 574–577 µs | +45.5 % |
+| SSE4.1 | 272–273 µs | 250 µs | 236 µs | 217 µs | +25.7 % |
+| AVX2 | 245 µs | 222–223 µs | 207–208 µs | 192–193 µs | +27.3 % |
+| scalar, W = 64 | 880–887 µs | 767–768 µs | 767–768 µs | 582–583 µs | +51.4 % |
+| SSE4.1, W = 64 | 306–308 µs | 291–292 µs | 270–271 µs | 220–222 µs | +39.1 % |
+| AVX2, W = 64 | 273–276 µs | 244–245 µs | 234–235 µs | 195–197 µs | +40.2 % |
+
+Without the checks, wrapping again costs about 2 %. Profiles, W = 64:
+AVX2 decode 85.2 % kernel, 12.0 % driver, 1.6 % byte-at-a-time path;
+SSE4.1 decode 86.7 % kernel loops, 10.6 % driver; AVX2 encode 91.2 %
+kernel, 8.6 % driver.
+
+### Stage 2 — Wrapping (2026-09-28)
+
+Changes: encoder batches capped at 64 blocks, their LFs written through a
+strided iterator (one bounds check per batch); the first line of a wrapped
+stream decoded in probe batches of 2 blocks, doubling on success; batches
+of whole lines up to 256 blocks (`LINE_BATCH`).
+
+A strided `chunks().take_while()` scan to count the lines of a batch was
+tried and dropped: it made wrapped decoding 7–9 % slower on both core
+types (isolated by variants, performance core: 244–248 µs against
+229–230 µs with the former counting loop, SSE4.1, W = 64).
+
+Quick harness (§1), five alternating rounds, fastest round; wrapping
+overhead = wrapped (W = 64) over unwrapped:
+
+| | performance core, before → after | efficiency core, before → after |
+|---|---|---|
+| encode SSE4.1 | 10.6 → 9.0 % | 8.8 → 4.3 % |
+| encode AVX2 | 10.9 → 14.1 % | 7.6 → 3.7 % |
+| decode SSE4.1 | 18.7 → 11.5 % | 14.6 → 8.0 % |
+| decode AVX2 | 11.6 → 8.5 % | 13.8 → 7.6 % |
+
+Unwrapped speed unchanged (within the ±2 % noise of the performance core).
+G2 is met on the efficiency core. On the performance core, AVX2 encode
+(14.1 %) and SSE4.1 decode (11.5 %) remain: the driver's share of wrapped
+AVX2 encoding is down to about 5 % (from 14.6 %), the rest is inside the
+kernel loop (two AVX2 units per 64-character line), which is stage 4's
+subject; the decode overhead is linked to validation (stage 3).
 
 ## Verification
 
