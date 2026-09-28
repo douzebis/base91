@@ -26,15 +26,16 @@ payloads and fewer bytes on the wire at every hop.
 
 ## Performance (Rust)
 
-Benchmarked on an Intel Core Ultra 7 165U, 1 MiB deterministic random input.
+Benchmarked on an Intel Core Ultra 7 165U, on one performance core, 1 MiB
+deterministic random input, version 0.3.0.
 
 ### Henke (wire-compatible) path
 
 | Variant | Encode | Decode |
 |---|---|---|
-| `encode` (safe) | 841 MiB/s | 872 MiB/s |
-| `encode_unchecked` | 993 MiB/s | 1.15 GiB/s |
-| `base91` v0.1.0 (dnsl48) | 624 MiB/s | 784 MiB/s |
+| `encode` / `decode` | 973 MiB/s | 1017 MiB/s |
+| `encode_slice` / `decode_slice` | 997 MiB/s | 1013 MiB/s |
+| `base91` v0.1.0 (dnsl48) | 708 MiB/s | 887 MiB/s |
 
 ### SIMD fixed-width variant (`--simd`)
 
@@ -45,14 +46,17 @@ shell.
 
 | Kernel | Encode | Decode |
 |---|---|---|
-| scalar | ~1.52 GiB/s | ~2.31 GiB/s |
-| SSE4.1 / NEON | ~4.40 GiB/s | ~6.25 GiB/s |
-| AVX2 | ~7.68 GiB/s | ~8.57 GiB/s |
+| scalar | 2.68 GiB/s | 2.49 GiB/s |
+| SSE4.1 / NEON | 4.58 GiB/s | 6.07 GiB/s |
+| AVX2 | 8.31 GiB/s | 8.23 GiB/s |
+
+SIMD streams are decoded strictly: damage is reported with its offset
+instead of producing wrong data.
 
 ## CLI quick start
 
 ```sh
-base91 file.bin > file.b91          # encode (Henke, wrap at 64 cols)
+base91 file.bin > file.b91          # encode (Henke, wrap at 76 cols)
 base91 -d file.b91 > file.bin       # decode
 base91 --simd file.bin > file.b91s  # encode with SIMD variant
 base91 -d file.b91s > file.bin      # decode either format (auto-detected)
@@ -64,7 +68,7 @@ b91dec < file.b91 > file.bin        # decode
 
 ```toml
 [dependencies]
-base91-rs = "0.2"
+base91-rs = "0.3"
 ```
 
 ```rust
@@ -74,8 +78,8 @@ let decoded = base91::decode(&encoded);
 
 // SIMD one-shot
 use base91::simd::{self, SimdLevel};
-let encoded = simd::encode(b"Hello, world!", SimdLevel::default(), 0);
-let decoded = simd::decode(&encoded, SimdLevel::default()).unwrap();
+let encoded = simd::encode(b"Hello, world!", SimdLevel::default(), 0).unwrap();
+let decoded = simd::decode(&encoded, SimdLevel::default()).unwrap(); // Result<_, base91::Error>
 ```
 
 ## Go quick start

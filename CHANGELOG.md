@@ -17,6 +17,69 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.0] - 2026-09-28
+
+The driver-layer rewrite (spec 0010), with strict SIMD
+decoding, an error type and an allocation-free API. Breaking. See the
+README's "Migrating from 0.2" section.
+
+### Changed (breaking)
+
+- `simd::encode` returns `Result<Vec<u8>, Error>`: a line width other than
+  0 or a multiple of 32 is `Error::InvalidWidth` (it used to be accepted).
+- `simd::decode` returns `Result<Vec<u8>, Error>` instead of an `Option`
+  that was always `Some`.
+- SIMD decoding is strict (spec 0008 §3.5): a byte outside the alphabet, a
+  broken line layout, an invalid payload length or a pair worth more than
+  8191 is an error, reported with its class and offset, instead of
+  decoding to garbage. The legacy (Henke) format is unchanged: junk bytes
+  are ignored, as the C reference does.
+- `simd::Decoder::decode` and `finish` return `Result<(), Error>` (it
+  returned `bool` and `()`); a decoder that failed keeps reporting its
+  error.
+- `simd::Encoder::new(level, wrap)` takes a line width and returns
+  `Result`: the streaming encoder now wraps lines.
+- `io::DecoderReader` reports an invalid SIMD stream as an `io::Error` of
+  kind `InvalidData`, wrapping the `Error`.
+- `base91 -d` reports an invalid SIMD stream with the error and its offset,
+  and exits with status 1.
+- Leading whitespace before `-` is skipped when detecting the format (spec
+  0008 §2); CR LF line endings are accepted in SIMD streams.
+
+### Added
+
+- `Error`: the error type of the fallible functions.
+- The slice API, available without an allocator: `encode_slice`,
+  `decode_slice` (legacy and `simd`), and `encode_slice` / `decode_slice` /
+  `finish_slice` on the streaming encoders and decoders. Sizes are checked
+  before anything is written.
+- `simd::encoded_len`: the exact encoded length.
+- Without the `alloc` feature: the whole slice API, `Error`, the length
+  functions and `simd::detect()`.
+- `base91 --simd` encodes in streaming mode, in bounded memory, instead of
+  reading all its input first.
+
+### Deprecated
+
+- `encode_unchecked` / `decode_unchecked` (crate root and `simd`): use the
+  slice API. They remain until 1.0; the SIMD ones no longer copy through a
+  temporary buffer. `simd::decode_unchecked` returns 0 for an invalid
+  stream.
+
+### Removed
+
+- The `simd::scalar` module (its encoder and decoder); the SIMD level
+  `SimdLevel::Scalar` covers it.
+
+### Performance
+
+Performance core of an Intel Core Ultra 7 165U, 1 MiB, against 0.2.3,
+strict checks included: SIMD decode 9–15 % faster (AVX2 −14.5 %), wrapped
+SIMD decode 5.4 times faster, scalar SIMD encode 40 % faster, streaming
+wrapped decode 3.7 times faster; the legacy codec is unchanged (−2 %).
+
+---
+
 ## [0.2.3] - 2026-09-27
 
 ### Security
@@ -185,7 +248,8 @@ implementation at <http://base91.sourceforge.net/>.
 Original C implementation by Joachim Henke.
 Source preserved unchanged in `src/`.
 
-[Unreleased]: https://github.com/douzebis/base91/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/douzebis/base91/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/douzebis/base91/releases/tag/v0.3.0
 [0.2.3]: https://github.com/douzebis/base91/releases/tag/v0.2.3
 [0.2.2]: https://github.com/douzebis/base91/releases/tag/v0.2.2
 [0.2.1]: https://github.com/douzebis/base91/releases/tag/v0.2.1

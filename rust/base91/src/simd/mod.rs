@@ -335,7 +335,7 @@ pub fn decode(input: &[u8], max_level: SimdLevel) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
-/// Decode `input` into `output`, auto-detecting the format as [`decode`]
+/// Decode `input` into `output`, auto-detecting the format as `decode`
 /// does, and return the number of bytes written.
 ///
 /// `output` must hold at least [`decode_size_hint`]`(input.len())` bytes;
@@ -366,7 +366,7 @@ fn decode_uninit(
 /// Encode `input` into a caller-provided buffer without bounds checking.
 /// Returns the number of bytes written (including the `-` prefix).
 ///
-/// Writes exactly what [`encode`] returns for the same arguments.
+/// Writes exactly what [`encode_slice`] writes for the same arguments.
 ///
 /// # Panics
 /// If `wrap` is neither 0 nor a multiple of 32.
@@ -395,7 +395,7 @@ pub unsafe fn encode_unchecked(
 
 /// Decode into a caller-provided buffer without bounds checking.
 ///
-/// Auto-detects the format as [`decode`] does. Returns the number of bytes
+/// Auto-detects the format as [`decode_slice`] does. Returns the number of bytes
 /// written, or 0 for an invalid SIMD stream: use [`decode_slice`] to tell
 /// errors apart.
 ///
@@ -422,9 +422,9 @@ pub unsafe fn decode_unchecked(input: &[u8], max_level: SimdLevel, output: *mut 
 /// Stateful SIMD fixed-width encoder, with line wrapping (spec 0008 §3.4,
 /// §3.6).
 ///
-/// Feed input with [`Encoder::encode`] (or [`Encoder::encode_slice`]);
-/// flush with [`Encoder::finish`] (or [`Encoder::finish_slice`]). The
-/// output is exactly [`encode`]'s, however the input is split. The `-`
+/// Feed input with `Encoder::encode` (or [`Encoder::encode_slice`]);
+/// flush with `Encoder::finish` (or [`Encoder::finish_slice`]). The
+/// output is exactly [`encode_slice`]'s, however the input is split. The `-`
 /// prefix is written with the first non-empty input, so an encoder that
 /// only sees empty input produces the empty stream.
 #[derive(Clone, Debug)]
@@ -501,7 +501,7 @@ impl Encoder {
 /// whitespace, `-` selects the SIMD variant, decoded strictly (spec 0008
 /// §3.5); anything else the Henke format, which never fails.
 ///
-/// The result is exactly [`decode`]'s, however the input is split: the same
+/// The result is exactly [`decode_slice`]'s, however the input is split: the same
 /// bytes, or the same error. Once it has reported an error, the decoder
 /// reports it again on every call.
 #[derive(Clone, Debug)]

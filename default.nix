@@ -76,7 +76,7 @@ let
   rustCommon = {
     src        = rustSrc;
     pname      = "base91";
-    version    = "0.2.3";
+    version    = "0.3.0";
     strictDeps = true;
     nativeBuildInputs = [ pkgs.cargo pkgs.rustc ];
   };
@@ -331,7 +331,7 @@ let
   # ---------------------------------------------------------------------------
   base91CLib = pkgs.stdenv.mkDerivation {
     pname   = "libbase91";
-    version = "0.2.3";
+    version = "0.3.0";
     src     = ./src;
 
     nativeBuildInputs = [ pkgs.clang pkgs.llvmPackages.bintools ];
@@ -362,7 +362,7 @@ let
   # ---------------------------------------------------------------------------
   goTests = pkgs.stdenv.mkDerivation {
     pname   = "base91-go-tests";
-    version = "0.2.3";
+    version = "0.3.0";
 
     # Include go/ sources and the shared test fixtures from the Rust crate.
     src = pkgs.lib.cleanSourceWith {
@@ -406,15 +406,15 @@ let
   # ---------------------------------------------------------------------------
   pybase91 = pkgs.python313Packages.buildPythonPackage {
     pname    = "pybase91";
-    version  = "0.2.3";
+    version  = "0.3.0";
     pyproject = true;
     src      = rustSrc;
 
     cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
       pname   = "pybase91";
-      version = "0.2.3";
+      version = "0.3.0";
       src     = rustSrc;
-      hash    = "sha256-br/pQVAgE1ul3Za4hEblB2OcFD6RAErswQVOCijg2oc=";
+      hash    = "sha256-s/oCK98e32AWSJnIgP4diSko5xr272va2IL3nZdUu0k=";
     };
 
     # maturin must be invoked from the crate subdirectory (not the workspace root)

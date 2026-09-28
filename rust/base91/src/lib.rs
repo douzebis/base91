@@ -31,11 +31,49 @@
 //! enc.finish(&mut out);
 //! ```
 //!
+//! # The SIMD variant
+//!
+//! [`simd`] implements a fixed-width variant of basE91 (not compatible with
+//! the C reference), designed for SIMD kernels. Its streams start with `-`;
+//! Its decoders ([`simd::decode_slice`], `simd::decode`, …) recognize both formats. SIMD streams are decoded
+//! strictly: damage is reported as an [`Error`], with its position.
+//!
+//! ```rust
+//! use base91::simd::{self, SimdLevel};
+//!
+//! let encoded = simd::encode(b"Hello, world!", SimdLevel::default(), 64)?;
+//! assert_eq!(simd::decode(&encoded, SimdLevel::default())?, b"Hello, world!");
+//!
+//! let damaged = [&encoded[..10], b" ", &encoded[10..]].concat();
+//! assert_eq!(
+//!     simd::decode(&damaged, SimdLevel::default()),
+//!     Err(base91::Error::InvalidCharacter { offset: 10 })
+//! );
+//! # Ok::<(), base91::Error>(())
+//! ```
+//!
+//! # Without an allocator
+//!
+//! The slice API writes into caller-provided buffers and works without the
+//! `alloc` feature. Each call checks the buffer size before writing:
+//!
+//! ```rust
+//! use base91::simd::{self, SimdLevel};
+//!
+//! let input = b"Hello, world!";
+//! let mut encoded = [0u8; 32];
+//! let n = simd::encode_slice(input, SimdLevel::default(), 0, &mut encoded)?;
+//! let mut decoded = [0u8; 32];
+//! let m = simd::decode_slice(&encoded[..n], SimdLevel::default(), &mut decoded)?;
+//! assert_eq!(&decoded[..m], input);
+//! # Ok::<(), base91::Error>(())
+//! ```
+//!
 //! # `std::io` adapters
 //!
-//! With the `io` feature (default), [`io::EncoderWriter`] and
-//! [`io::DecoderReader`] wrap any [`Write`][std::io::Write] /
-//! [`Read`][std::io::Read] and handle buffering automatically:
+//! With the `io` feature (default), `io::EncoderWriter` and
+//! `io::DecoderReader` wrap any `std::io::Write` / `std::io::Read` and
+//! handle buffering automatically:
 //!
 //! ```rust
 //! use base91::io::{EncoderWriter, DecoderReader};
@@ -82,7 +120,7 @@ pub use python::stub_info;
 /// Conservative upper bound on the encoded length for `input_len` input bytes.
 ///
 /// Encoding ratio is at most 16/13 bits, plus 2 bytes for `finish()`.
-/// Pre-reserving this capacity before feeding chunks to [`Encoder::encode`]
+/// Pre-reserving this capacity before feeding chunks to [`Encoder::encode_slice`] or `Encoder::encode`
 /// ensures the `Vec` never reallocates during encoding.
 ///
 /// ```rust
@@ -98,7 +136,7 @@ pub fn encode_size_hint(input_len: usize) -> usize {
 ///
 /// Each pair of base91 characters carries at most 14 bits = 1 full output byte
 /// plus residual bits, plus 1 byte for `finish()`.
-/// Pre-reserving this capacity before feeding chunks to [`Decoder::decode`]
+/// Pre-reserving this capacity before feeding chunks to [`Decoder::decode_slice`] or `Decoder::decode`
 /// ensures the `Vec` never reallocates during decoding.
 ///
 /// ```rust

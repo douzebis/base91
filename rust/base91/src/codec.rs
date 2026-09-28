@@ -6,7 +6,7 @@
 //!
 //! This is a clean-room Rust reimplementation of the algorithm invented by
 //! Joachim Henke.  The alphabet and wire format are identical to the C
-//! reference (http://base91.sourceforge.net/), ensuring byte-for-byte
+//! reference (<http://base91.sourceforge.net/>), ensuring byte-for-byte
 //! interoperability.
 
 #[cfg(feature = "alloc")]
@@ -55,8 +55,8 @@ pub(crate) const DECTAB: &[u8; 256] = &{
 
 /// Stateful basE91 encoder.
 ///
-/// Feed input in chunks with [`encode`][Encoder::encode] (or
-/// [`encode_slice`][Encoder::encode_slice]); call [`finish`][Encoder::finish]
+/// Feed input in chunks with `encode` (or
+/// [`encode_slice`][Encoder::encode_slice]); call `finish`
 /// (or [`finish_slice`][Encoder::finish_slice]) to flush the remaining bits.
 ///
 /// ```
@@ -207,8 +207,8 @@ impl Default for Encoder {
 
 /// Stateful basE91 decoder.
 ///
-/// Feed encoded text in chunks with [`decode`][Decoder::decode] (or
-/// [`decode_slice`][Decoder::decode_slice]); call [`finish`][Decoder::finish]
+/// Feed encoded text in chunks with `decode` (or
+/// [`decode_slice`][Decoder::decode_slice]); call `finish`
 /// (or [`finish_slice`][Decoder::finish_slice]) to flush any remaining
 /// partial value. Non-alphabet bytes (including newlines) are silently
 /// ignored.

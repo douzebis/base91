@@ -6,6 +6,9 @@ SPDX-License-Identifier: MIT
 
 # basE91 Performance Analysis
 
+*Historical: an analysis of the 0.2.x code. For current numbers, see
+`rust/base91/README.md`; for the 0.3.0 driver, specs 0010 and 0011.*
+
 Machine: Intel Core Ultra 7 165U, pinned to P-cores 0+2 (no HT sibling contention).
 Compilers: rustc 1.91.1 (LLVM), clang 21.1.7.
 Bench tool: Criterion (100 samples, 1 MiB deterministic input, seed 0xdeadbeef_cafebabe).

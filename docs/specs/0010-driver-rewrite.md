@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0010 — Driver-layer rewrite: in-place layout, strict decoding, slice API (0.3.0)
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** —
+**Implemented in:** 2026-09-28
 
 Supersedes spec 0007 (allocation-free API), whose content is folded in
 here. Implements the parts of spec 0008 that 0.2.x does not (annex A2, A4,

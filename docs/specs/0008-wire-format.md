@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0008 — Wire format (normative)
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** —
+**Implemented in:** 2026-09-28
 
 ## Purpose
 
@@ -369,6 +369,11 @@ None.
 
 State of `main` at `f994029`, i.e. release 0.2.2, checked while writing
 this spec. Where a fix is already specified, the spec is named.
+
+**Status (2026-09-28): every inconsistency is resolved.** A3–A8 are fixed
+in 0.2.3 (specs 0005, 0006); A2, A4, A9–A14 and A18 in 0.3.0 (spec 0010);
+A1 by marking spec 0002's wire-format sections as superseded. A15–A17 are
+kept as tests. The table below records the 0.2.2 behavior.
 
 | # | Topic | Current behavior | This spec | Fix |
 |---|---|---|---|---|

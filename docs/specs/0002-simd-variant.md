@@ -10,6 +10,12 @@ SPDX-License-Identifier: MIT
 **App:** base91
 **Implemented in:** —
 
+> **Superseded in part (0.3.0).** The wire format (*Wire format*,
+> *Alphabet*, *`--wrap` constraint*) is now specified normatively by
+> spec 0008, and the API (*Henke API*, *SIMD API*) by spec 0010. Those
+> sections are kept for history; where they disagree, specs 0008 and 0010
+> apply.
+
 ## Problem
 
 The Henke basE91 algorithm uses variable-width groups (13 or 14 bits,
@@ -58,6 +64,8 @@ in-band signal for transparent decoding.
 
 ### Wire format — SIMD variant
 
+*Superseded by spec 0008 (§3).*
+
 A SIMD-variant stream begins with a single `-` byte (0x2D). The rest of
 the stream is fixed-width 13-bit groups encoded two characters each, using
 the SIMD alphabet defined below.
@@ -76,6 +84,8 @@ the SIMD alphabet defined below.
 a valid Henke stream can never begin with `-`. The prefix is unambiguous.
 
 ### Alphabet — SIMD variant
+
+*Superseded by spec 0008 (§3.1).*
 
 The SIMD alphabet is 91 consecutive printable ASCII characters, omitting
 only `\` (0x5C) at the midpoint:
@@ -107,6 +117,8 @@ branch). Invalid bytes are detected by a range check after the
 subtraction.
 
 ### `--wrap` constraint with `--simd`
+
+*Superseded by spec 0008 (§3.4).*
 
 With `--simd`, the `-w` / `--wrap` value must be a multiple of 32.
 The AVX2 kernel processes two 13-byte blocks per call, producing 32
@@ -241,6 +253,8 @@ The existing `codec.rs` Henke path is untouched.
 
 ### Henke API (`base91-rs`, unchanged)
 
+*Superseded by spec 0010 (§2).*
+
 ```rust
 // One-shot
 pub fn encode(input: &[u8]) -> Vec<u8>;
@@ -262,6 +276,8 @@ pub mod io {
 ```
 
 ### SIMD API (`base91::simd`, new)
+
+*Superseded by spec 0010 (§2).*
 
 ```rust
 /// Arch-agnostic SIMD width selector.

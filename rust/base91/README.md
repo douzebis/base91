@@ -29,28 +29,31 @@ hop from RAM to NIC to network switch.
 
 - **`no_std`** compatible, with or without `alloc` (see [below](#no_std))
 - **SIMD-accelerated** — optional fixed-width variant with SSE4.1, AVX2, and
-  NEON kernels; up to **7.68 GiB/s encode / 8.57 GiB/s decode** on x86_64
+  NEON kernels; up to **8.3 GiB/s encode / 8.2 GiB/s decode** on x86_64
+- **Strict SIMD decoding** — damaged SIMD streams are reported as an
+  `Error`, with the kind of damage and its offset, never decoded to garbage
+- **Slice API** — `encode_slice` / `decode_slice` write into caller buffers,
+  with no allocator (sizes checked before writing)
 - **Streaming API** — feed data in chunks, no full-buffer requirement
 - **`std::io` adapters** — `EncoderWriter<W>` and `DecoderReader<R>` (feature `io`, on by default)
-- **Unsafe unchecked variants** — `encode_unchecked` / `decode_unchecked` for callers that
-  pre-allocate with the provided size hints
 
 ## Performance
 
-Benchmarked on an Intel Core Ultra 7 165U, pinned to P-cores (no HT contention),
-1 MiB deterministic random input (seed `0xdeadbeef_cafebabe`).
-Decode throughput for the SIMD variant is measured on encoded bytes (≈1.23× input).
+Benchmarked on an Intel Core Ultra 7 165U, on one performance core (no
+hyperthread contention), 1 MiB deterministic random input (seed
+`0xdeadbeef_cafebabe`), `cargo bench --bench throughput`, version 0.3.0.
+Decode throughput is measured on encoded bytes (≈1.23× input).
 
 ### Henke (wire-compatible) path
 
 | Crate / variant | Encode | Decode |
 |---|---|---|
-| **`base91-rs` safe (`encode`)** | **841 MiB/s** | **872 MiB/s** |
-| **`base91-rs` unchecked (`encode_unchecked`)** | **993 MiB/s** | **1.15 GiB/s** |
-| `base91` v0.1.0 (dnsl48) | 624 MiB/s | 784 MiB/s |
+| **`base91-rs` (`encode` / `decode`)** | **973 MiB/s** | **1017 MiB/s** |
+| **`base91-rs` slice API (`encode_slice` / `decode_slice`)** | **997 MiB/s** | **1013 MiB/s** |
+| `base91` v0.1.0 (dnsl48) | 708 MiB/s | 887 MiB/s |
 
-**~1.35× faster encode, ~1.47× faster decode** vs the next most popular crate
-on the safe API.  The unchecked API reaches **~1.59× / ~1.47×**.
+**~1.4× faster encode, ~1.15× faster decode** than the next most popular
+crate.
 
 ### SIMD fixed-width variant (`--simd` flag / `simd` module)
 
@@ -60,20 +63,23 @@ the Henke path.  The encoded stream is prefixed with `-` to distinguish it
 from Henke output.  The alphabet (0x23–0x26, 0x28–0x7E) omits `'` so
 output is safe to single-quote in any POSIX shell.
 
-| Path | Encode | Decode | vs. Henke unchecked |
+| Path | Encode | Decode | vs. Henke slice API |
 |---|---|---|---|
-| scalar fixed-width | ~1.52 GiB/s | ~2.31 GiB/s | 1.5× / 2.0× |
-| simd128 (SSE4.1 / NEON) | ~4.40 GiB/s | ~6.25 GiB/s | 4.4× / 5.4× |
-| simd256 (AVX2) | ~7.68 GiB/s | ~8.57 GiB/s | 7.7× / 7.5× |
+| scalar fixed-width | 2.68 GiB/s | 2.49 GiB/s | 2.8× / 2.5× |
+| simd128 (SSE4.1 / NEON) | 4.58 GiB/s | 6.07 GiB/s | 4.7× / 6.1× |
+| simd256 (AVX2) | 8.31 GiB/s | 8.23 GiB/s | 8.5× / 8.3× |
+| simd256, lines of 64 | 7.08 GiB/s | 7.30 GiB/s | 7.3× / 7.4× |
 
-The SIMD kernel auto-selects the best available level at runtime (AVX2 →
-SSE4.1 → NEON → scalar).
+Decoding includes the strict validation. The SIMD kernel auto-selects the
+best available level at runtime (AVX2 → SSE4.1 → NEON → scalar). On
+efficiency cores, whose AVX2 units are half-width, AVX2 is about as fast as
+SSE4.1.
 
 ## Usage
 
 ```toml
 [dependencies]
-base91-rs = "0.2"
+base91-rs = "0.3"
 ```
 
 ### One-shot (Henke)
@@ -100,22 +106,70 @@ enc.finish(&mut out);
 ```rust
 use base91::simd::{self, SimdLevel};
 
-let encoded = simd::encode(b"some input", SimdLevel::default(), 0);
+// Lines of 64 characters; 0 for none. A width must be a multiple of 32.
+let encoded = simd::encode(b"some input", SimdLevel::default(), 64).unwrap();
 let decoded = simd::decode(&encoded, SimdLevel::default()).unwrap();
 assert_eq!(decoded, b"some input");
 ```
 
+`simd::decode` also decodes legacy (Henke) streams: the format is detected
+from the first byte that is not whitespace (`-` for the SIMD variant).
+
+### Errors
+
+SIMD streams are decoded strictly. Damage is reported, with its offset in
+the input:
+
+```rust
+use base91::{simd, Error};
+
+let result = simd::decode(b"-##\"##", simd::SimdLevel::default());
+assert_eq!(result, Err(Error::InvalidCharacter { offset: 3 }));
+```
+
+The classes are `InvalidCharacter`, `InvalidLayout` (a line break where
+none belongs, lines of the wrong length, mixed LF / CR LF),
+`InvalidLength` and `InvalidValue`; `Error` implements `Display` and
+`std::error::Error`. Legacy streams never fail: like the C reference, the
+decoder ignores bytes outside the alphabet.
+
+### Without an allocator: the slice API
+
+```rust
+use base91::simd::{self, SimdLevel};
+
+let input = b"some input";
+let mut encoded = [0u8; 64];
+let n = simd::encode_slice(input, SimdLevel::default(), 0, &mut encoded).unwrap();
+
+let mut decoded = [0u8; 64];
+let m = simd::decode_slice(&encoded[..n], SimdLevel::default(), &mut decoded).unwrap();
+assert_eq!(&decoded[..m], input);
+```
+
+Each call checks the buffer against the size it needs before writing; a
+buffer too small gives `Error::BufferTooSmall { needed }` and leaves the
+buffer untouched. `simd::encoded_len(n, wrap)` is the exact encoded size,
+`simd::decode_size_hint(len)` a bound on the decoded one. The legacy format
+has `base91::encode_slice` / `decode_slice`, and every streaming encoder
+and decoder has `encode_slice` / `decode_slice` and `finish_slice`.
+
 ### Streaming SIMD
 
 ```rust
-use base91::simd::{self, Encoder as SimdEncoder, SimdLevel};
+use base91::simd::{Encoder as SimdEncoder, SimdLevel};
 
 let input = b"some large input";
 let mut out = Vec::new();
-let mut enc = SimdEncoder::new(SimdLevel::default());
-enc.encode(input, &mut out);
+let mut enc = SimdEncoder::new(SimdLevel::default(), 64).unwrap();
+for chunk in input.chunks(4) {
+    enc.encode(chunk, &mut out);
+}
 enc.finish(&mut out);
 ```
+
+The output is the one-shot encoding, however the input is split; the same
+holds for `simd::Decoder`, errors included.
 
 ### `std::io` adapters
 
@@ -141,25 +195,17 @@ The crate has three levels, selected with Cargo features
 | Features | Environment | API |
 |---|---|---|
 | default (`std`, `io`) | hosted | everything, including the `io` adapters |
-| `default-features = false, features = ["alloc"]` | `no_std` with a heap | everything that returns a `Vec` (`encode`, `decode`, `Encoder`, `Decoder`, `simd::*`); no `io` |
-| `default-features = false` | `no_std`, no heap | see below |
+| `default-features = false, features = ["alloc"]` | `no_std` with a heap | everything but the `io` adapters |
+| `default-features = false` | `no_std`, no heap | everything that does not return a `Vec` |
 
 ```toml
 [dependencies]
-base91-rs = { version = "0.2", default-features = false, features = ["alloc"] }
+base91-rs = { version = "0.3", default-features = false }
 ```
 
-Without `alloc`, the public API is:
-
-| Item | Why it's available |
-|---|---|
-| `encode_size_hint`, `decode_size_hint` | pure arithmetic |
-| `encode_unchecked`, `decode_unchecked` (Henke, crate root) | write into a caller-provided buffer |
-| `simd::SimdLevel`, `simd::detect()` | no allocation |
-| `simd::encode_size_hint`, `simd::decode_size_hint` | pure arithmetic |
-
-The SIMD and streaming paths still need `alloc`; a later release will make
-them available without it.
+Without `alloc`, the whole slice API is available (one-shot and
+streaming, both formats), with `Error`, the length functions and
+`simd::detect()`: only the functions returning a `Vec` need `alloc`.
 
 **SIMD selection.** With `std`, the SIMD kernel is chosen at run time from
 the CPU's features. Without `std`, it is chosen at compile time from the
@@ -172,6 +218,24 @@ enable them, e.g. `-C target-cpu=native` or
 not enabled the SIMD registers. Do not enable SIMD target features there:
 keep the target's defaults. The compiler then lowers the SIMD kernels to
 scalar code, which is correct but slower than the scalar kernel.
+
+## Migrating from 0.2
+
+- `simd::encode` returns `Result<Vec<u8>, Error>`: add `?` or `.unwrap()`.
+  A line width other than 0 or a multiple of 32 is now an error.
+- `simd::decode` returns `Result<Vec<u8>, Error>` instead of an `Option`
+  that was always `Some`. Damaged SIMD streams are now errors instead of
+  garbage.
+- `simd::Decoder::decode` and `finish` return `Result<(), Error>`.
+- `simd::Encoder::new(level)` becomes `simd::Encoder::new(level, wrap)`,
+  returning `Result` (0 for no wrapping, as before).
+- `io::DecoderReader` fails with `io::ErrorKind::InvalidData` on a damaged
+  SIMD stream; the `Error` is inside (`io::Error::into_inner`).
+- `encode_unchecked` / `decode_unchecked` (both formats) are deprecated:
+  use `encode_slice` / `decode_slice`, which check the buffer size instead
+  of relying on the caller.
+- `simd::scalar` is gone: `SimdLevel::Scalar` selects the portable path.
+- Nothing changes for the legacy (Henke) format.
 
 ## License
 
