@@ -143,7 +143,7 @@ fn check_legacy_decode(stream: &[u8], p: &Params) {
     // Without upstream, the decoders must at least agree with each other.
     if classified_legacy(stream) {
         let expected = base91::decode(stream);
-        assert_eq!(simd::decode(stream, p.level), Some(expected));
+        assert_eq!(simd::decode(stream, p.level), Ok(expected));
     }
 }
 
