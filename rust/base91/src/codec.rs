@@ -229,6 +229,34 @@ pub struct Decoder {
     val: u32,
 }
 
+/// Appends the 13- or 14-bit group of pair value `v` to the bit queue and
+/// drains the whole bytes into `out` at `n`; returns the new `n`.
+#[inline(always)]
+fn push_pair(
+    v: u32,
+    queue: &mut u32,
+    nbits: &mut u32,
+    out: &mut [MaybeUninit<u8>],
+    mut n: usize,
+) -> usize {
+    *queue |= v << *nbits;
+    // Branchless 13/14-bit selection.
+    *nbits += if v & 0x1fff > 88 { 13 } else { 14 };
+
+    // Drain: at most 2 bytes (unrolled, no loop).
+    out[n].write(*queue as u8);
+    n += 1;
+    *queue >>= 8;
+    *nbits -= 8;
+    if *nbits >= 8 {
+        out[n].write(*queue as u8);
+        n += 1;
+        *queue >>= 8;
+        *nbits -= 8;
+    }
+    n
+}
+
 impl Decoder {
     /// Create a new decoder with empty state.
     #[inline]
@@ -308,8 +336,30 @@ impl Decoder {
         let mut val = self.val;
         let mut n: usize = 0;
 
-        for &byte in input {
-            let d = DECTAB[byte as usize] as u32;
+        let mut i = 0;
+        while i < input.len() {
+            // Fast path: while no character is pending, decode whole pairs of
+            // alphabet bytes, one branch per pair.
+            if val == u32::MAX {
+                let mut rest = &input[i..];
+                while let [b0, b1, tail @ ..] = rest {
+                    let d0 = DECTAB[*b0 as usize] as u32;
+                    let d1 = DECTAB[*b1 as usize] as u32;
+                    if (d0 == 91) | (d1 == 91) {
+                        break;
+                    }
+                    rest = tail;
+                    n = push_pair(d0 + d1 * 91, &mut queue, &mut nbits, out, n);
+                }
+                i = input.len() - rest.len();
+                if i == input.len() {
+                    break;
+                }
+            }
+            // Slow path: one byte (a junk byte, a pending character, or the
+            // last byte).
+            let d = DECTAB[input[i] as usize] as u32;
+            i += 1;
             if d == 91 {
                 continue; // not in alphabet
             }
@@ -317,24 +367,8 @@ impl Decoder {
                 val = d; // first char of pair
             } else {
                 // Second char: reconstruct value.
-                let v = val + d * 91;
+                n = push_pair(val + d * 91, &mut queue, &mut nbits, out, n);
                 val = u32::MAX;
-
-                queue |= v << nbits;
-                // Branchless 13/14-bit selection.
-                nbits += if v & 0x1fff > 88 { 13 } else { 14 };
-
-                // Drain: at most 2 bytes (unrolled, no loop).
-                out[n].write(queue as u8);
-                n += 1;
-                queue >>= 8;
-                nbits -= 8;
-                if nbits >= 8 {
-                    out[n].write(queue as u8);
-                    n += 1;
-                    queue >>= 8;
-                    nbits -= 8;
-                }
             }
         }
 

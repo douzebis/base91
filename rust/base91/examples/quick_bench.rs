@@ -16,7 +16,8 @@
 //! ```
 //!
 //! A case is `enc` or `dec`, a level (`scalar`, `128`, `256`) and a line
-//! width (`w0`, `w64`), e.g. `dec256w64`; with no argument, all twelve.
+//! width (`w0`, `w64`), e.g. `dec256w64`, or `legenc` / `legdec` for the
+//! legacy format; with no argument, all fourteen.
 //! Prints one line per case: the case and the fastest run in µs.
 
 use base91::simd::{self, SimdLevel};
@@ -59,6 +60,7 @@ fn fastest(mut f: impl FnMut() -> usize) -> f64 {
 fn main() {
     let mut cases: Vec<String> = std::env::args().skip(1).collect();
     if cases.is_empty() {
+        cases.extend(["legenc".to_string(), "legdec".to_string()]);
         for dir in ["enc", "dec"] {
             for level in ["scalar", "128", "256"] {
                 for wrap in ["w0", "w64"] {
@@ -77,7 +79,19 @@ fn main() {
             state as u8
         })
         .collect();
+    let legacy = base91::encode(&input);
+    let mut leg_enc = vec![0u8; base91::encode_size_hint(input.len())];
+    let mut leg_dec = vec![0u8; base91::decode_size_hint(legacy.len())];
     for case in cases {
+        if case == "legenc" || case == "legdec" {
+            let us = if case == "legenc" {
+                fastest(|| base91::encode_slice(black_box(&input), &mut leg_enc).unwrap())
+            } else {
+                fastest(|| base91::decode_slice(black_box(&legacy), &mut leg_dec).unwrap())
+            };
+            println!("{case:12} {us:8.1}");
+            continue;
+        }
         let Some((encode, level, wrap)) = parse(&case) else {
             eprintln!("unknown case: {case}");
             std::process::exit(2);

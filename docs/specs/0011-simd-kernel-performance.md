@@ -168,6 +168,19 @@ made this way:
 - A variant under study (a validation formulation, a loop shape) is a
   temporary patch in a separate worktree, built before measuring, then
   discarded; only the chosen variant is committed.
+- **The efficiency cores are warmed up** for a few seconds before their
+  rounds: after the performance-core rounds, the first efficiency-core
+  runs are up to 12 % slow, for every build alike.
+- **The performance core's clock is not constant:** 3.70–4.11 GHz with
+  the same binary, depending on the code and the data, and drifting down
+  within a 20-second run (power or thermal limit; the efficiency core held
+  3.68 GHz). A difference of a few percent on the performance core alone
+  can be the clock, not the code; it counts when the efficiency core
+  agrees or when cycle counts confirm it.
+- **Hardware counters** come from the host: the VM has no virtual PMU.
+  `perf stat -I 2000 -t <vCPU thread>` on the host, with the `cpu_core/…/G`
+  or `cpu_atom/…/G` events of the vCPU's core type, while the VM runs
+  20-second phases of each build in turn.
 
 ### 2 — Baseline
 
@@ -473,7 +486,70 @@ Against 0.2.2 (`07ce3ea`, the published state), one-shot `Vec` API,
 512 KiB: SIMD decode with validation is 2.1–2.9 times faster unwrapped and
 9–14 times faster wrapped than 0.2.2 without it. The legacy codec
 regressed: encode +12 % (performance core), decode +37 % (efficiency core)
-— under investigation.
+— see the next section.
+
+### Stage 3 — Legacy decoder (2026-09-28)
+
+**Cause of the efficiency-core regression: code placement, not code.**
+The legacy decoding loop has the same source in 0.2.2 and 0.3.0; only its
+surroundings changed (the slice core of spec 0006). Host counters,
+efficiency core, 512 KiB of random data, `Vec` API:
+
+| Build | µs/run | IPC | branch misses |
+|---|---|---|---|
+| 0.2.2 | 1063 | 3.94 | 0.16 % |
+| 0.3.0 and stage 3 part 1 | 1469 | 3.04 | 0.19 % |
+| same, loops aligned to 64 bytes (`-C llvm-args=-align-loops=64`) | 3294 | 1.51 | ≤ 0.19 % |
+
+The clock is constant (3.68 GHz) and the branch misses negligible (0 on
+all-zero data); the alignment padding adds only 6–19 % more instructions.
+The loop is front-end bound: the efficiency core has no micro-op cache,
+and a loop of about two short blocks per input byte, with two taken
+branches, decodes at a speed set by where those blocks fall. Moving the
+loop out of line and restoring 0.2.2's exact loop shape changed nothing; a
+branch-free drain helped the efficiency core but was 25 % slower on the
+performance core.
+
+**Fix: one pair per iteration.** While no character is pending, the
+decoder takes two input bytes at a time (`[b0, b1, tail @ ..]`), looks
+both up, and decodes the pair in one straight block when both are in the
+alphabet: one taken branch per pair instead of about two per byte. A
+junk byte, a pending character or the last byte fall back to the former
+byte-at-a-time path, so behavior is unchanged (the matrix and legacy
+tests pass as they are).
+
+Host counters, 512 KiB, `Vec` API, cycles per run from the measured clock:
+
+| Build | efficiency core: µs (cycles), IPC | performance core: µs (cycles), IPC |
+|---|---|---|
+| 0.2.2 | 1066 (3.92 M), 3.94 | 632 (2.46 M), 6.22 |
+| stage 3 part 1 | 1492 (5.49 M), 3.04 | 658 (2.45 M), 6.68 |
+| one pair per iteration | 863 (3.18 M), 3.90 | 502 (1.91 M), 6.47 |
+
+- About 12.4 M instructions per run, against 15.4 M (0.2.2) and 16.7 M;
+  the same counts on both core types. Cycles −19 % (efficiency core) and
+  −22 % (performance core) against 0.2.2.
+- The performance-core "regression" of 0.3.0 was the clock: the same
+  cycle count as 0.2.2 (2.45 M against 2.46 M), at 3.72 GHz instead of
+  about 3.9.
+- Branch misses 0.17–0.26 % on random data (0.12–0.16 % before), 0 on
+  zeros.
+- **Placement no longer matters:** loops aligned to 32 or 64 bytes give
+  the same speed (quick harness, efficiency core 831.2 / 832.2 / 831.3 µs,
+  performance core 445.8 / 451.4 / 445.0 µs); the same flag made the
+  former loop 2.2 times slower.
+
+Two variants were measured and dropped: a single junk test
+(`d0.max(d1) == 91`, one `cmova` and one branch) was +6.7 % on the
+performance core and even on the efficiency core; indexing (`input[i]`,
+`input[i + 1]`) instead of the slice pattern left a redundant bounds check
+in the loop, 3–5 % slower on both core types.
+
+The legacy encoder is unchanged. Against 0.2.2 (`Vec` API, fastest of five
+rounds) it is +5 % on the performance core (534 against 506 µs) and even on
+the efficiency core (923 against 924 µs), not the +12 % measured before;
+the difference is within the clock variation above, not confirmed by
+cycle counts.
 
 ## Verification
 
