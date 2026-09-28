@@ -196,32 +196,35 @@ fn bench_decode_simd(c: &mut Criterion) {
     g.finish();
 }
 
-/// Wrapped one-shot encode and decode (the CLI default width, 64), best level.
+/// Wrapped one-shot encode and decode (the CLI default width, 64), at every
+/// level: the loop around the kernels differs from the unwrapped case only
+/// when a batch spans several lines (spec 0011).
 fn bench_simd_wrapped(c: &mut Criterion) {
     use base91::simd::SimdLevel;
     let input = seeded_bytes(SIZE);
     let encoded = base91::simd::encode(&input, SimdLevel::default(), 64).unwrap();
+    let levels = [
+        ("scalar_w64", SimdLevel::Scalar),
+        ("simd128_w64", SimdLevel::Simd128),
+        ("simd256_w64", SimdLevel::Simd256),
+    ];
 
     let mut g = c.benchmark_group("encode_simd_wrapped");
     g.throughput(Throughput::Bytes(input.len() as u64));
-    g.bench_with_input(
-        BenchmarkId::new("simd256_w64", "1mib"),
-        &input,
-        |b, input| {
-            b.iter(|| base91::simd::encode(input, SimdLevel::Simd256, 64).unwrap());
-        },
-    );
+    for (name, level) in levels {
+        g.bench_with_input(BenchmarkId::new(name, "1mib"), &input, |b, input| {
+            b.iter(|| base91::simd::encode(input, level, 64).unwrap());
+        });
+    }
     g.finish();
 
     let mut g = c.benchmark_group("decode_simd_wrapped");
     g.throughput(Throughput::Bytes(encoded.len() as u64));
-    g.bench_with_input(
-        BenchmarkId::new("simd256_w64", "1mib"),
-        &encoded,
-        |b, encoded| {
-            b.iter(|| base91::simd::decode(encoded, SimdLevel::Simd256).unwrap());
-        },
-    );
+    for (name, level) in levels {
+        g.bench_with_input(BenchmarkId::new(name, "1mib"), &encoded, |b, encoded| {
+            b.iter(|| base91::simd::decode(encoded, level).unwrap());
+        });
+    }
     g.finish();
 }
 

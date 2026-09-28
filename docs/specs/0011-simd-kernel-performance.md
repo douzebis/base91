@@ -41,8 +41,11 @@ protocol*, §1), strict checks included:
 
 ## Goals
 
+Every goal applies on both core types: performance and efficiency cores
+(§1).
+
 - **G1 — Validation cost:** at most 3 % of decode throughput (spec 0008
-  §3.5), SSE4.1 and AVX2, unwrapped and wrapped, on a performance core. If
+  §3.5), SSE4.1 and AVX2, unwrapped and wrapped. If
   the best formulation cannot reach it, the lowest cost reached, with the
   evidence (open question 1).
 - **G2 — Wrapping overhead:** wrapped (W = 64) within 10 % of unwrapped,
@@ -144,9 +147,12 @@ done in spec 0010). This spec does (1), with a gate for (2) (§6).
 Every number in this spec, and every decision, comes from measurements
 made this way:
 
-- On a **performance core**: in the dev VM, `taskset -c 8` (host CPU 0),
-  with vCPU 9 (its hyperthread sibling) idle. Numbers from other cores are
-  labeled.
+- On **both core types** of the dev machine (an Intel Core Ultra 7 165U):
+  - a **performance core**: `taskset -c 8` (host CPU 0), with vCPU 9, its
+    hyperthread sibling, idle;
+  - an **efficiency core**: `taskset -c 4` (host CPU 8), with vCPUs 5–7,
+    the rest of its four-core cluster (they share an L2 cache), idle.
+  Every number says which core it comes from.
 - **Nothing else runs**: every binary is built before measuring, and no
   build, test or Nix job runs until the measurement ends.
 - **A/B comparisons alternate** over three rounds; results are reported
@@ -250,11 +256,17 @@ lifted (see the 0.2.3 and 0.3.0 releases).
 
 ## Stages
 
-1. **Baseline** (§2), recorded under *Results*.
-2. **Kernel shape** (§3), with the G3 check.
-3. **Validation** (§4), with the G1 check.
-4. **Wrapping** (§5), with the G2 check.
+1. **Baseline** (§2), on both core types, recorded under *Results*.
+2. **Wrapping** (§5): the targeted fixes the baseline points to (the
+   per-line LF loop of the encoder, the byte-by-byte re-read of the first
+   batch), with the G2 check.
+3. **Validation** (§4), with the G1 check. The baseline shows it is also
+   most of the decode wrapping overhead.
+4. **Kernel shape** (§3), with the G3 check.
 5. **Gate and release** (§6, §7, §8).
+
+(Reordered after the baseline, decision 3: the biggest and simplest levers
+first.)
 
 One commit per stage, each with every check passing.
 
@@ -264,6 +276,9 @@ One commit per stage, each with every check passing.
    each other, for every measurable code path, the scalar one included.
 2. **NEON is reshaped** like the x86 kernels, so the three SIMD kernels
    keep the same structure, although its speed cannot be measured here.
+3. **Efficiency cores are in scope**, measured on one core of a cluster
+   with the other three idle (§1); the stages are reordered after the
+   baseline: wrapping fixes and validation before the reshaping.
 
 ## Open questions
 
@@ -274,7 +289,74 @@ One commit per stage, each with every check passing.
 
 ## Results
 
-(To be filled in at each stage.)
+### Stage 1 — Baseline (2026-09-28)
+
+#### Performance core
+
+1 MiB, 0.3.0 (`36d0202`), three alternating rounds
+(lowest–highest), protocol of §1.
+
+**Loop shapes** (§2). Each shape applied to every kernel and to the scalar
+path, in a separate tree; all trees pass the library and matrix tests.
+
+| Bench | (a) flat | (b) out of line | (c) nested | spread |
+|---|---|---|---|---|
+| encode, scalar | 492–500 µs | 386–394 µs | 376–381 µs | 31 % |
+| encode, SSE4.1 | 218–220 µs | 213–214 µs | 212–213 µs | 3.1 % |
+| encode, AVX2 | 123–124 µs | 119–120 µs | 120 µs | 3.0 % |
+| decode, scalar | 555–558 µs | 495–496 µs | 496–497 µs | 12.5 % |
+| decode, SSE4.1 | 210–211 µs | 200–201 µs | 199–201 µs | 5.3 % |
+| decode, AVX2 | 149–150 µs | 146–147 µs | 154 µs | 5.0 % |
+| encode W = 64, scalar | 509–519 µs | 466–467 µs | 455–456 µs | 13.1 % |
+| encode W = 64, SSE4.1 | 236–239 µs | 246–247 µs | 242 µs | 3.8 % |
+| encode W = 64, AVX2 | 142–143 µs | 147–148 µs | 137–138 µs | 7.1 % |
+| decode W = 64, scalar | 570–573 µs | 540–541 µs | 538–540 µs | 6.0 % |
+| decode W = 64, SSE4.1 | 225–227 µs | 227 µs | 221 µs | 2.6 % |
+| decode W = 64, AVX2 | 165–167 µs | 177–178 µs | 175 µs | 6.9 % |
+
+On a performance core, the SIMD kernels' sensitivity is 2.6–7.1 %, not the
+factor of two seen on the efficiency core; the scalar path is the most
+sensitive (up to 31 %, the flat loop being the worst). No shape is the
+fastest everywhere.
+
+**Validation cost** (§2), decode, in trees with parts of the check removed.
+On the scalar path the range and `'` checks are one table lookup, so
+"range only" equals "without 8191" there.
+
+| Decode | full checks | without 8191 | range only | no checks | cost |
+|---|---|---|---|---|---|
+| scalar | 497–505 µs | 478–482 µs | 478–480 µs | 367–372 µs | +35.5 % |
+| SSE4.1 | 203 µs | 186–187 µs | 176–178 µs | 166 µs | +22.5 % |
+| AVX2 | 150–151 µs | 141 µs | 134 µs | 130–131 µs | +15.6 % |
+| scalar, W = 64 | 539–540 µs | 540–542 µs | 540–550 µs | 373–375 µs | +44.2 % |
+| SSE4.1, W = 64 | 228 µs | 213 µs | 205–206 µs | 168–169 µs | +35.5 % |
+| AVX2, W = 64 | 165–167 µs | 157–158 µs | 150–151 µs | 132 µs | +25.9 % |
+
+Per part, unwrapped: AVX2 range +2.7 %, `'` +5.3 %, 8191 +6.9 %; SSE4.1
++6.7 %, +5.4 %, +9 %; scalar table check +30 %, 8191 +4.5 %.
+
+**Wrapping** (§2). Without the checks, wrapped decoding costs almost
+nothing over unwrapped (SSE4.1 168 against 166 µs, AVX2 132 against
+130 µs): G2's decode overhead appears with the validation. Profiles
+(`perf`, share of cycles):
+
+| | kernel | driver | byte-at-a-time path |
+|---|---|---|---|
+| AVX2 decode, unwrapped | 95.6 % | 2.5 % | — |
+| AVX2 decode, W = 64 | 87.2 % | 10.1 % | 1.9 % |
+| SSE4.1 decode, W = 64 | 91.4 % | 5.9 % | 1.9 % |
+| AVX2 encode, unwrapped | 99.5 % | — | — |
+| AVX2 encode, W = 64 | 85.4 % | 14.6 % | — |
+
+- Decode: the kernel takes the same absolute time wrapped or not; the
+  extra is the driver's per-line work (terminator checks, the loop that
+  counts the lines of a batch), which overlaps with the kernel when it
+  does not validate, and the first line: W is unknown until the first
+  terminator, so the first batch (up to 1 024 characters) fails on it and
+  is re-read byte by byte, once per stream (1.9 % at 1 MiB, more for
+  smaller streams).
+- Encode: the driver's loop that writes one LF per line after the kernel
+  call, bounds-checked (14.6 %).
 
 ## Verification
 
