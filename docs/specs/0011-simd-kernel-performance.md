@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0011 — SIMD kernel performance: validation cost, wrapping overhead, robust code generation
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** —
+**Implemented in:** 2026-09-28
 
 Follows spec 0010 (driver rewrite, 0.3.0), which left two performance
 targets unmet and found the kernels' speed fragile under the compiler.
@@ -710,6 +710,48 @@ efficiency core, −3.9 to +8.7 % on the performance core for the same
 machine code (its clock variation, §1). Kept: it states the intent in the
 source instead of relying on the compiler. NEON keeps its constants
 inline (not measurable here).
+
+### Stage 5 — Gate and release (2026-09-28)
+
+**Goals, final:**
+
+- G1 (decision 4, at most 30 %): met, +17 to +27 %.
+- G2 (decision 5, at most 25 % on performance cores, 10 % on efficiency
+  cores): met on performance cores (encode +20 to +23 %, decode +10 to
+  +15 %); on efficiency cores met except SSE4.1 decode, at +12 %.
+- G3 (decision 6): met: nested loops for every kernel, no spill or
+  register shuffling in any shape.
+- G4: met. Criterion, 1 MiB, performance core, against the 0.3.0 figures
+  of spec 0010 (*Stage 1 results*):
+
+| | 0.3.0 | 0.3.1 |
+|---|---|---|
+| decode, unwrapped: scalar / SSE4.1 / AVX2 | 489–492 / 201 / 147–149 µs | 508 / 121 / 73 µs |
+| decode, W = 64 (AVX2) | 168–170 µs | 71 µs |
+| encode, unwrapped: scalar / SSE4.1 / AVX2 | 367–372 / 215–218 / 119–120 µs | 389 / 147 / 77 µs |
+| encode, W = 64 (AVX2) | 138–140 µs | 95 µs |
+| streaming decode, unwrapped / W = 64 | 164–165 / 196–197 µs | 82 / 94 µs |
+| legacy encode / decode (`Vec` API) | 1057–1066 / 1223–1242 µs | 1129 / 1041 µs |
+
+  The scalar paths and the legacy encoder, which this spec does not
+  change, read 3–6 % slower in this single run; the quick harness,
+  alternating 0.3.0 and 0.3.1 builds on both core types, puts them within
+  1.6 % (scalar encode +0.4 / +0.6 %, scalar decode −1.6 / +0.2 %, legacy
+  encode +0.1 / 0.0 %; legacy decode −24 / −36 %): the performance core's
+  clock (§1). On the efficiency core, criterion: SIMD decode SSE4.1 /
+  AVX2 138 / 136 µs (0.3.0: 273 / 245), encode 215 / 202 µs (335 / 329).
+
+**Assembly gate** (§6): not triggered. G1 and G3 are met as decided (4,
+6), and assembly could not remove what remains: the four validation
+operations per block, and the per-line work of wrapped streams.
+
+**Tests** (§7): the workspace tests with the reference features, the Nix
+checks (x86_64 and aarch64 under qemu, `no_std` on both, clippy, fmt)
+and 61 seconds of fuzzing per target pass. `perf_sanity` re-calibrated
+at 70 % of the lowest ratios of six performance-core runs:
+Simd128/Scalar 1.75 / 3.18 (was 1.15 / 1.76), wrapped/unwrapped 0.49 /
+0.59 (was 0.59 / 0.58: lower for encode, decision 5), Simd256/Simd128
+still capped at 0.90.
 
 ## Verification
 

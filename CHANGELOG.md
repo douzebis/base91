@@ -17,6 +17,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.1] - 2026-09-28
+
+Faster SIMD and legacy decoding and SIMD encoding (spec 0011). No API or
+format change.
+
+### Performance
+
+Criterion, 1 MiB, one performance core of an Intel Core Ultra 7 165U,
+against 0.3.0, strict checks included:
+
+- SIMD decode: SSE4.1 201 → 121 µs (−40 %), AVX2 148 → 73 µs (−51 %);
+  wrapped at 64 columns 169 → 71 µs; streaming 164 → 82 µs, wrapped
+  196 → 94 µs.
+- SIMD encode: SSE4.1 216 → 147 µs (−32 %), AVX2 120 → 77 µs (−36 %);
+  wrapped at 64 columns 139 → 95 µs.
+- Efficiency cores: SIMD decode about twice as fast, encode 30–40 %
+  faster.
+- Legacy decode 24 % faster on a performance core and 36 % on an
+  efficiency core (one pair of characters per loop iteration), faster
+  than 0.2.x on both; legacy encode and the scalar SIMD level unchanged.
+- NEON kernels rewritten on the same arithmetic (speed not measured).
+
+### Changed
+
+- The wire-format specification (spec 0008 §3.5) now asks error detection
+  to cost at most 30 % of decode throughput, not 3 %: exact checks take
+  four vector operations per 16 characters with this alphabet, now about
+  a third of the decoder's work (+17 to +27 % measured).
+
+---
+
 ## [0.3.0] - 2026-09-28
 
 The driver-layer rewrite (spec 0010), with strict SIMD
@@ -248,7 +279,8 @@ implementation at <http://base91.sourceforge.net/>.
 Original C implementation by Joachim Henke.
 Source preserved unchanged in `src/`.
 
-[Unreleased]: https://github.com/douzebis/base91/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/douzebis/base91/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/douzebis/base91/releases/tag/v0.3.1
 [0.3.0]: https://github.com/douzebis/base91/releases/tag/v0.3.0
 [0.2.3]: https://github.com/douzebis/base91/releases/tag/v0.2.3
 [0.2.2]: https://github.com/douzebis/base91/releases/tag/v0.2.2

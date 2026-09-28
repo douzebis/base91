@@ -26,35 +26,37 @@ const SIZE: usize = 512 << 10;
 const RUNS: usize = 51;
 
 /// Minimum ratios (encode, decode), calibrated on the dev machine at 70 % of
-/// the lowest ratio measured over three runs (spec 0009, decision 6). Dev
+/// the lowest ratio measured (spec 0009, decision 6), rounded down. Dev
 /// machine, 2026-09-28: Intel Core Ultra 7 165U, measured on a performance
-/// core (`taskset -c 8` in the dev VM), 0.3.0 driver (spec 0010), MB/s
-/// encode / decode, three runs:
+/// core (`taskset -c 8` in the dev VM), kernels of spec 0011, MB/s encode /
+/// decode, three runs:
 ///
 /// | | encode | decode |
 /// |---|---|---|
-/// | legacy | 1040–1106 | 905–908 |
-/// | Scalar, W=0 | 3045–3106 | 2292–2328 |
-/// | Simd128, W=0 | 5123–5232 | 5795–5904 |
-/// | Simd256, W=0 | 9293–9880 | 7747–7763 |
-/// | Simd256, W=64 | 8242–8421 | 6407–6761 |
+/// | legacy | 1005–1128 | 1167–1198 |
+/// | Scalar, W=0 | 2962–2996 | 2232–2334 |
+/// | Simd128, W=0 | 7540–8022 | 10433–10607 |
+/// | Simd256, W=0 | 15430–15722 | 19686–21051 |
+/// | Simd256, W=64 | 12275–13392 | 17680–18104 |
 ///
-/// Ratios, lowest–highest: Simd128/Scalar 1.65–1.72 / 2.52–2.54;
-/// Simd256/Simd128 1.81–1.89 / 1.31–1.34; wrapped/unwrapped 0.85–0.89 /
-/// 0.83–0.87.
+/// Ratios, lowest–highest over six runs: Simd128/Scalar 2.51–2.68 /
+/// 4.55–4.68; Simd256/Simd128 1.92–2.19 / 1.89–2.00; wrapped/unwrapped
+/// 0.71–0.87 / 0.85–0.90. On an efficiency core (`taskset -c 4`):
+/// 3.07–3.80 / 5.54–6.30; 1.05–1.07 / 0.93–1.04; 0.85–0.94 / 0.92.
 ///
 /// The Simd256/Simd128 thresholds are capped at 0.90 instead of 70 %:
 /// machines whose AVX2 units are half-width (efficiency cores, older AMD)
 /// run AVX2 at about the SSE4.1 speed, and the guard is only meant to catch
-/// AVX2 falling behind SSE4.1.
+/// AVX2 falling behind SSE4.1. The wrapped encode threshold went down with
+/// spec 0011 (decision 5): the kernels got faster, the per-line cost did not.
 ///
 /// With these measurement conditions the ratios vary by a few hundredths
 /// between runs, so the guards catch a code-generation regression like the
 /// ones recorded in spec 0011 ("Code-generation sensitivity") when it moves
 /// a ratio by more than about a third.
-const MIN_SIMD128_OVER_SCALAR: (f64, f64) = (1.15, 1.76);
+const MIN_SIMD128_OVER_SCALAR: (f64, f64) = (1.75, 3.18);
 const MIN_SIMD256_OVER_SIMD128: (f64, f64) = (0.90, 0.90);
-const MIN_WRAPPED_OVER_UNWRAPPED: (f64, f64) = (0.59, 0.58);
+const MIN_WRAPPED_OVER_UNWRAPPED: (f64, f64) = (0.49, 0.59);
 
 /// Throughput of `f`, in MB/s of original data: the fastest of `RUNS`
 /// runs, after one warm-up run.

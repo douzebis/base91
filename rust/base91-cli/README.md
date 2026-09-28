@@ -12,7 +12,7 @@ binary-to-text encoding.
 basE91 encodes binary data into printable ASCII using only **~1.23 bytes per
 input byte** — versus Base64's 1.33.  Drop-in replacement for the C reference
 `base91` binary, with an optional SIMD-accelerated fixed-width variant that
-reaches **8.3 GiB/s encode / 8.2 GiB/s decode** on AVX2 hardware.
+reaches **12.7 GiB/s encode / 16.5 GiB/s decode** on AVX2 hardware.
 
 ## Installation
 
@@ -84,13 +84,14 @@ but the decoder auto-detects the format — plain `base91 -d` decodes both.
   with status 1. Legacy (Henke) streams are decoded as the C reference
   does, ignoring bytes outside the alphabet.
 
-Library throughput (Intel Core Ultra 7 165U, one performance core, 1 MiB):
+Library throughput (Intel Core Ultra 7 165U, one performance core, 1 MiB,
+0.3.1; decode measured on encoded bytes):
 
 | Kernel | Encode | Decode |
 |---|---|---|
-| scalar | 2.68 GiB/s | 2.49 GiB/s |
-| SSE4.1 / NEON | 4.58 GiB/s | 6.07 GiB/s |
-| AVX2 | 8.31 GiB/s | 8.23 GiB/s |
+| scalar | 2.51 GiB/s | 2.37 GiB/s |
+| SSE4.1 / NEON | 6.63 GiB/s | 9.97 GiB/s |
+| AVX2 | 12.7 GiB/s | 16.5 GiB/s |
 
 The best available kernel is selected automatically at runtime.
 

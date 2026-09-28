@@ -29,7 +29,7 @@ hop from RAM to NIC to network switch.
 
 - **`no_std`** compatible, with or without `alloc` (see [below](#no_std))
 - **SIMD-accelerated** — optional fixed-width variant with SSE4.1, AVX2, and
-  NEON kernels; up to **8.3 GiB/s encode / 8.2 GiB/s decode** on x86_64
+  NEON kernels; up to **12.7 GiB/s encode / 16.5 GiB/s decode** on x86_64
 - **Strict SIMD decoding** — damaged SIMD streams are reported as an
   `Error`, with the kind of damage and its offset, never decoded to garbage
 - **Slice API** — `encode_slice` / `decode_slice` write into caller buffers,
@@ -41,18 +41,21 @@ hop from RAM to NIC to network switch.
 
 Benchmarked on an Intel Core Ultra 7 165U, on one performance core (no
 hyperthread contention), 1 MiB deterministic random input (seed
-`0xdeadbeef_cafebabe`), `cargo bench --bench throughput`, version 0.3.0.
+`0xdeadbeef_cafebabe`), `cargo bench --bench throughput`, version 0.3.1,
+one run. Absolute
+figures vary by up to about 10 % between sessions on this laptop chip;
+the ratios within one run hold.
 Decode throughput is measured on encoded bytes (≈1.23× input).
 
 ### Henke (wire-compatible) path
 
 | Crate / variant | Encode | Decode |
 |---|---|---|
-| **`base91-rs` (`encode` / `decode`)** | **973 MiB/s** | **1017 MiB/s** |
-| **`base91-rs` slice API (`encode_slice` / `decode_slice`)** | **997 MiB/s** | **1013 MiB/s** |
-| `base91` v0.1.0 (dnsl48) | 708 MiB/s | 887 MiB/s |
+| **`base91-rs` (`encode` / `decode`)** | **886 MiB/s** | **1182 MiB/s** |
+| **`base91-rs` slice API (`encode_slice` / `decode_slice`)** | **859 MiB/s** | **1241 MiB/s** |
+| `base91` v0.1.0 (dnsl48) | 657 MiB/s | 814 MiB/s |
 
-**~1.4× faster encode, ~1.15× faster decode** than the next most popular
+**~1.3× faster encode, ~1.5× faster decode** than the next most popular
 crate.
 
 ### SIMD fixed-width variant (`--simd` flag / `simd` module)
@@ -65,10 +68,10 @@ output is safe to single-quote in any POSIX shell.
 
 | Path | Encode | Decode | vs. Henke slice API |
 |---|---|---|---|
-| scalar fixed-width | 2.68 GiB/s | 2.49 GiB/s | 2.8× / 2.5× |
-| simd128 (SSE4.1 / NEON) | 4.58 GiB/s | 6.07 GiB/s | 4.7× / 6.1× |
-| simd256 (AVX2) | 8.31 GiB/s | 8.23 GiB/s | 8.5× / 8.3× |
-| simd256, lines of 64 | 7.08 GiB/s | 7.30 GiB/s | 7.3× / 7.4× |
+| scalar fixed-width | 2.51 GiB/s | 2.37 GiB/s | 3.0× / 2.0× |
+| simd128 (SSE4.1 / NEON) | 6.63 GiB/s | 9.97 GiB/s | 7.9× / 8.2× |
+| simd256 (AVX2) | 12.7 GiB/s | 16.5 GiB/s | 15.2× / 13.6× |
+| simd256, lines of 64 | 10.3 GiB/s | 17.1 GiB/s | 12.2× / 14.1× |
 
 Decoding includes the strict validation. The SIMD kernel auto-selects the
 best available level at runtime (AVX2 → SSE4.1 → NEON → scalar). On
