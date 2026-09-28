@@ -49,7 +49,6 @@
 
 #![allow(non_snake_case)]
 
-use alloc::vec::Vec;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
@@ -68,7 +67,8 @@ const SHIFT91: i32 = 2;
 /// `output` must be writable for 16 bytes.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1,ssse3")]
-pub(crate) unsafe fn encode_block_sse41(input: *const u8, output: *mut u8) {
+#[inline]
+unsafe fn encode_block_sse41(input: *const u8, output: *mut u8) {
     // Load 16 bytes (13 used, caller provides ≥16 readable bytes).
     let data = _mm_loadu_si128(input as *const __m128i);
 
@@ -190,14 +190,16 @@ pub(crate) unsafe fn encode_block_sse41(input: *const u8, output: *mut u8) {
 
 /// Decode 16 SIMD-alphabet characters into 13 output bytes.
 ///
-/// Returns `false` if any byte is not in the SIMD alphabet.
+/// Returns a mask that is nonzero if any byte is not in the SIMD alphabet,
+/// or any pair is worth more than 8191. The output is written either way.
 ///
 /// # Safety
 /// Requires SSE4.1 + SSSE3.
 /// `input` readable for 16 bytes; `output` writable for 13.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1,ssse3")]
-pub(crate) unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> bool {
+#[inline]
+unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> __m128i {
     let chars = _mm_loadu_si128(input as *const __m128i);
 
     // -----------------------------------------------------------------------
@@ -215,17 +217,14 @@ pub(crate) unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> bo
     let raw = _mm_sub_epi8(chars, _mm_set1_epi8(0x23u8 as i8));
     let indices8 = _mm_add_epi8(raw, needs_bump); // subtracts 1 where > 0x26
 
-    // Validate: indices must be 0–90. Values that were out of alphabet
-    // will have wrapped or be > 90.
-    // Check also that original chars were not below 0x23 (would underflow to > 90).
-    let max_valid = _mm_set1_epi8(90i8);
-    let invalid = _mm_cmpgt_epi8(indices8, max_valid);
-    // Also detect chars below 0x23: after subtracting 0x23 they become > 127
-    // as signed, which cmpgt(_, 90) already catches since 90 < 127.
-    // But unsigned wrap: 0x00 - 0x23 = 0xDD = 221 > 90. Caught.
-    if _mm_movemask_epi8(invalid) != 0 {
-        return false;
-    }
+    // Invalid characters (spec 0010 §5): every byte outside 0x23–0x7E gets
+    // an index above 90 as an *unsigned* byte (the subtraction wraps), so a
+    // saturating subtraction of 90 leaves it nonzero. `'` (0x27) maps to the
+    // index of `&` and is rejected by comparison. Checked with the values,
+    // below.
+    let over = _mm_subs_epu8(indices8, _mm_set1_epi8(90));
+    let apostrophe = _mm_cmpeq_epi8(chars, _mm_set1_epi8(0x27));
+    let bad_chars = _mm_or_si128(over, apostrophe);
 
     // -----------------------------------------------------------------------
     // Step 2: Deinterleave and reconstruct 13-bit values.
@@ -243,6 +242,10 @@ pub(crate) unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> bo
 
     // val = lo + hi * 91
     let vals = _mm_add_epi16(lo16, _mm_mullo_epi16(hi16, _mm_set1_epi16(91)));
+
+    // Pairs worth more than 8191 (spec 0008 invalid value) have a bit above
+    // bit 12.
+    let bad = _mm_or_si128(bad_chars, _mm_srli_epi16(vals, 13));
 
     // -----------------------------------------------------------------------
     // Step 3: Scatter 8 × 13-bit values back into 13 bytes via SIMD.
@@ -373,14 +376,12 @@ pub(crate) unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> bo
     );
     let hi_out = _mm_shuffle_epi8(hi_merged, scatter_hi);
 
-    // Combine and store.
-    // decode_loop reserves out_needed + OUT spare bytes, so writing 16 bytes
-    // here is safe even though only 13 are valid data (3 bytes of harmless
-    // overwrite into spare capacity).
+    // Combine and store 16 bytes, of which 13 are data: the caller provides
+    // 3 bytes of slack (see `decode_blocks_sse41`).
     let out128 = _mm_or_si128(lo_out, hi_out);
     _mm_storeu_si128(output as *mut __m128i, out128);
 
-    true
+    bad
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +404,8 @@ pub(crate) unsafe fn decode_block_sse41(input: *const u8, output: *mut u8) -> bo
 /// Requires AVX2 + SSSE3. `input` readable for 32 bytes (padded); `output` for 32.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,ssse3")]
-pub(crate) unsafe fn encode_block_avx2(input: *const u8, output: *mut u8) {
+#[inline]
+unsafe fn encode_block_avx2(input: *const u8, output: *mut u8) {
     // Load the two 13-byte blocks into the low and high 128-bit lanes
     // independently.  A single 256-bit load would place block1 at an offset
     // of 13 bytes into the high lane, misaligning it relative to the shuffle
@@ -489,13 +491,16 @@ pub(crate) unsafe fn encode_block_avx2(input: *const u8, output: *mut u8) {
 
 /// Decode 32 SIMD-alphabet characters into 26 output bytes (two blocks).
 ///
-/// Returns `false` if any character is not in the SIMD alphabet.
+/// Returns a mask that is nonzero if any character is not in the SIMD
+/// alphabet, or any pair is worth more than 8191. The output is written
+/// either way.
 ///
 /// # Safety
 /// Requires AVX2. `input` readable for 32 bytes; `output` writable for 26.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,ssse3")]
-pub(crate) unsafe fn decode_block_avx2(input: *const u8, output: *mut u8) -> bool {
+#[inline]
+unsafe fn decode_block_avx2(input: *const u8, output: *mut u8) -> __m256i {
     let chars = _mm256_loadu_si256(input as *const __m256i);
 
     // Step 1: Reverse map characters → indices 0–90.
@@ -504,12 +509,10 @@ pub(crate) unsafe fn decode_block_avx2(input: *const u8, output: *mut u8) -> boo
     let raw = _mm256_sub_epi8(chars, _mm256_set1_epi8(0x23u8 as i8));
     let indices8 = _mm256_add_epi8(raw, needs_bump);
 
-    // Validate: all indices ≤ 90.
-    let max_valid = _mm256_set1_epi8(90i8);
-    let invalid = _mm256_cmpgt_epi8(indices8, max_valid);
-    if _mm256_movemask_epi8(invalid) != 0 {
-        return false;
-    }
+    // Invalid characters: as in `decode_block_sse41`.
+    let over = _mm256_subs_epu8(indices8, _mm256_set1_epi8(90));
+    let apostrophe = _mm256_cmpeq_epi8(chars, _mm256_set1_epi8(0x27));
+    let bad_chars = _mm256_or_si256(over, apostrophe);
 
     // Step 2: Deinterleave and reconstruct 13-bit values.
     let shuf_lo = _mm256_set_epi8(
@@ -526,6 +529,9 @@ pub(crate) unsafe fn decode_block_avx2(input: *const u8, output: *mut u8) -> boo
     let lo16 = _mm256_unpacklo_epi8(lo8_sep, zero);
     let hi16 = _mm256_unpacklo_epi8(hi8_sep, zero);
     let vals = _mm256_add_epi16(lo16, _mm256_mullo_epi16(hi16, _mm256_set1_epi16(91)));
+
+    // Pairs worth more than 8191.
+    let bad = _mm256_or_si256(bad_chars, _mm256_srli_epi16(vals, 13));
 
     // Step 3: Scatter 8 × 13-bit values per lane back into 13 bytes each.
     // Extract the two 128-bit lanes and apply the same pshufb scatter as
@@ -610,8 +616,8 @@ pub(crate) unsafe fn decode_block_avx2(input: *const u8, output: *mut u8) -> boo
         let hi_merged = _mm_or_si128(hi_shifted, _mm_shuffle_epi8(hi_shifted, sec_hi_shuf));
         let hi_out = _mm_shuffle_epi8(hi_merged, scatter_hi);
 
-        // decode_loop reserves out_needed + OUT spare bytes; writing 16 bytes
-        // here is safe (3-byte harmless overwrite into spare capacity).
+        // 16-byte store for 13 data bytes: the second block's store ends 3
+        // bytes past the unit's 26 (see `decode_blocks_avx2`).
         let out128 = _mm_or_si128(lo_out, hi_out);
         _mm_storeu_si128(dst as *mut __m128i, out128);
     }
@@ -633,94 +639,137 @@ pub(crate) unsafe fn decode_block_avx2(input: *const u8, output: *mut u8) -> boo
         output.add(13),
     );
 
-    true
+    bad
 }
 
 // ---------------------------------------------------------------------------
-// Block-loop entry points used by mod.rs dispatch
+// Batch entry points, used by the driver (spec 0010 §3, §5)
 // ---------------------------------------------------------------------------
+//
+// A batch is `lines` lines of `n` blocks (or AVX2 units) each. The encoded
+// side of a line starts every `stride` bytes (the line and its terminator);
+// the raw side is contiguous. One call per batch keeps the per-line cost to
+// the loop itself, and the decoders test their validity once per batch.
 
+/// Encodes `lines` × `n` blocks of 13 bytes; line `l`'s characters go to
+/// `output + l · stride`.
+///
+/// # Safety
+/// Requires SSE4.1 + SSSE3. `input` readable for `13 n · lines + 3` bytes
+/// (the kernel loads 16); every line's `16 n` output bytes writable.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1,ssse3")]
-pub(crate) unsafe fn encode_sse41(input: &[u8], output: &mut Vec<u8>) {
-    encode_loop::<13, 16>(input, output, encode_block_sse41);
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2,ssse3")]
-pub(crate) unsafe fn encode_avx2(input: &[u8], output: &mut Vec<u8>) {
-    encode_loop::<26, 32>(input, output, encode_block_avx2);
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sse4.1,ssse3")]
-pub(crate) unsafe fn decode_sse41(input: &[u8], output: &mut Vec<u8>) -> bool {
-    decode_loop::<16, 13>(input, output, decode_block_sse41)
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2,ssse3")]
-pub(crate) unsafe fn decode_avx2(input: &[u8], output: &mut Vec<u8>) -> bool {
-    decode_loop::<32, 26>(input, output, decode_block_avx2)
-}
-
-// ---------------------------------------------------------------------------
-// Generic loop helpers
-// ---------------------------------------------------------------------------
-
-#[cfg(target_arch = "x86_64")]
-#[inline(always)]
-unsafe fn encode_loop<const IN: usize, const OUT: usize>(
-    input: &[u8],
-    output: &mut Vec<u8>,
-    block_fn: unsafe fn(*const u8, *mut u8),
+pub(crate) unsafe fn encode_lines_sse41(
+    input: *const u8,
+    output: *mut u8,
+    stride: usize,
+    n: usize,
+    lines: usize,
 ) {
-    let full_blocks = input.len() / IN;
-    let out_needed = full_blocks * OUT;
-    output.reserve(out_needed + OUT);
-
-    // Padded buffer so block_fn can always read IN+3 bytes safely.
-    let mut pad = [0u8; 32];
-
-    let spare = output.spare_capacity_mut();
-    let out_ptr = spare.as_mut_ptr() as *mut u8;
-
-    for i in 0..full_blocks {
-        let offset = i * IN;
-        let remaining = input.len() - offset;
-        let src = if remaining >= IN + 3 {
-            input.as_ptr().add(offset)
-        } else {
-            let n = remaining.min(pad.len());
-            core::ptr::copy_nonoverlapping(input.as_ptr().add(offset), pad.as_mut_ptr(), n);
-            pad.as_ptr()
-        };
-        block_fn(src, out_ptr.add(i * OUT));
-    }
-
-    output.set_len(output.len() + out_needed);
-}
-
-#[cfg(target_arch = "x86_64")]
-#[inline(always)]
-unsafe fn decode_loop<const IN: usize, const OUT: usize>(
-    input: &[u8],
-    output: &mut Vec<u8>,
-    block_fn: unsafe fn(*const u8, *mut u8) -> bool,
-) -> bool {
-    let full_blocks = input.len() / IN;
-    let out_needed = full_blocks * OUT;
-    output.reserve(out_needed + OUT);
-
-    let spare = output.spare_capacity_mut();
-    let out_ptr = spare.as_mut_ptr() as *mut u8;
-
-    for i in 0..full_blocks {
-        if !block_fn(input.as_ptr().add(i * IN), out_ptr.add(i * OUT)) {
-            return false;
+    for l in 0..lines {
+        let (src, dst) = (input.add(13 * n * l), output.add(stride * l));
+        for i in 0..n {
+            encode_block_sse41(src.add(13 * i), dst.add(16 * i));
         }
     }
+}
 
-    output.set_len(output.len() + out_needed);
-    true
+/// As [`encode_lines_sse41`], with `n` AVX2 units of 26 bytes per line.
+///
+/// # Safety
+/// Requires AVX2 + SSSE3. `input` readable for `26 n · lines + 3` bytes;
+/// every line's `32 n` output bytes writable.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,ssse3")]
+pub(crate) unsafe fn encode_lines_avx2(
+    input: *const u8,
+    output: *mut u8,
+    stride: usize,
+    n: usize,
+    lines: usize,
+) {
+    for l in 0..lines {
+        let (src, dst) = (input.add(26 * n * l), output.add(stride * l));
+        for i in 0..n {
+            encode_block_avx2(src.add(26 * i), dst.add(32 * i));
+        }
+    }
+}
+
+/// Decodes `lines` × `n` blocks of 16 characters, line `l` read from
+/// `input + l · stride`, into contiguous output, and returns whether every
+/// block was valid. The output is written even for invalid blocks.
+///
+/// # Safety
+/// Requires SSE4.1 + SSSE3. Every line's `16 n` input bytes readable;
+/// `output` writable for `13 n · lines + 3` (the kernel stores 16).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse4.1,ssse3")]
+pub(crate) unsafe fn decode_lines_sse41(
+    input: *const u8,
+    stride: usize,
+    output: *mut u8,
+    n: usize,
+    lines: usize,
+) -> bool {
+    let mut ok = true;
+    for l in 0..lines {
+        ok &= decode_line_sse41(input.add(stride * l), output.add(13 * n * l), n);
+    }
+    ok
+}
+
+/// One line of [`decode_lines_sse41`]: a plain loop over `n` blocks, kept
+/// out of line, so that its code does not depend on the loop around it.
+/// Chosen by measurement: the flat loop of `decode_lines_avx2` is twice as
+/// slow here. See spec 0011, "Code-generation sensitivity".
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse4.1,ssse3")]
+#[inline(never)]
+unsafe fn decode_line_sse41(input: *const u8, output: *mut u8, n: usize) -> bool {
+    let mut bad = _mm_setzero_si128();
+    for i in 0..n {
+        bad = _mm_or_si128(
+            bad,
+            decode_block_sse41(input.add(16 * i), output.add(13 * i)),
+        );
+    }
+    _mm_testz_si128(bad, bad) != 0
+}
+
+/// As [`decode_lines_sse41`], with `n` AVX2 units of 32 characters per line.
+///
+/// # Safety
+/// Requires AVX2 + SSSE3. Every line's `32 n` input bytes readable;
+/// `output` writable for `26 n · lines + 3`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,ssse3")]
+pub(crate) unsafe fn decode_lines_avx2(
+    input: *const u8,
+    stride: usize,
+    output: *mut u8,
+    n: usize,
+    lines: usize,
+) -> bool {
+    // One flat loop, skipping each terminator at the end of a line. Chosen
+    // by measurement, like the out-of-line line loop of
+    // `decode_lines_sse41`: nested loops are slower here (the compiler
+    // rotates the kernel's constants between registers on every block),
+    // while the flat loop is twice as slow for SSE4.1. See spec 0011,
+    // "Code-generation sensitivity".
+    let skip = stride.wrapping_sub(32 * n);
+    let (mut src, mut dst) = (input, output);
+    let mut left = n;
+    let mut bad = _mm256_setzero_si256();
+    for _ in 0..n * lines {
+        bad = _mm256_or_si256(bad, decode_block_avx2(src, dst));
+        src = src.add(32);
+        dst = dst.add(26);
+        left -= 1;
+        if left == 0 {
+            src = src.wrapping_add(skip);
+            left = n;
+        }
+    }
+    _mm256_testz_si256(bad, bad) != 0
 }

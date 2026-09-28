@@ -62,6 +62,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 mod codec;
+mod error;
 #[cfg(feature = "io")]
 pub mod io;
 #[cfg(feature = "python")]
@@ -70,6 +71,7 @@ pub mod simd;
 
 #[cfg(feature = "alloc")]
 pub use codec::{Decoder, Encoder};
+pub use error::Error;
 
 /// Return stub generation metadata for the `pybase91` Python extension.
 ///

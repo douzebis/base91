@@ -35,7 +35,6 @@
 
 #![allow(non_snake_case)]
 
-use alloc::vec::Vec;
 #[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::*;
 
@@ -49,7 +48,8 @@ const SHIFT91: i32 = 18; // 16 + 2
 /// Only safe to call on aarch64.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn encode_block_neon(input: *const u8, output: *mut u8) {
+#[inline]
+unsafe fn encode_block_neon(input: *const u8, output: *mut u8) {
     let data = vld1q_u8(input);
 
     // -----------------------------------------------------------------------
@@ -175,13 +175,16 @@ pub(crate) unsafe fn encode_block_neon(input: *const u8, output: *mut u8) {
 
 /// Decode 16 SIMD-alphabet characters into 13 output bytes.
 ///
-/// Returns `false` if any input character is not in the SIMD alphabet.
+/// Returns a mask that is nonzero if any input character is not in the SIMD
+/// alphabet, or any pair is worth more than 8191. The output is written
+/// either way.
 ///
 /// # Safety
 /// `input` must be readable for 16 bytes; `output` writable for 13.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> bool {
+#[inline]
+unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> uint8x16_t {
     let chars = vld1q_u8(input);
 
     // -----------------------------------------------------------------------
@@ -197,12 +200,12 @@ pub(crate) unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> boo
     let raw = vsubq_u8(chars, base);
     let indices8 = vaddq_u8(raw, needs_bump); // subtracts 1 where > 0x26
 
-    // Validate: all indices must be ≤ 90.
-    let max_valid = vdupq_n_u8(90);
-    let invalid = vcgtq_u8(indices8, max_valid);
-    if vmaxvq_u8(invalid) != 0 {
-        return false;
-    }
+    // Invalid characters (spec 0010 §5): every byte outside 0x23–0x7E gets
+    // an index above 90 (unsigned comparison). `'` (0x27) maps to the index
+    // of `&` and is rejected by comparison. Checked with the values, below.
+    let over = vcgtq_u8(indices8, vdupq_n_u8(90));
+    let apostrophe = vceqq_u8(chars, vdupq_n_u8(0x27));
+    let bad_chars = vorrq_u8(over, apostrophe);
 
     // -----------------------------------------------------------------------
     // Step 2: Deinterleave and reconstruct 13-bit values.
@@ -218,6 +221,10 @@ pub(crate) unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> boo
     let lo16 = vmovl_u8(vget_low_u8(lo8_sep));
     let hi16 = vmovl_u8(vget_low_u8(hi8_sep));
     let vals = vmlaq_u16(lo16, hi16, vdupq_n_u16(91));
+
+    // Pairs worth more than 8191 (spec 0008 invalid value) have a bit above
+    // bit 12.
+    let bad = vorrq_u8(bad_chars, vreinterpretq_u8_u16(vshrq_n_u16::<13>(vals)));
 
     // -----------------------------------------------------------------------
     // Step 3: Scatter 8 × 13-bit values back into 13 output bytes using
@@ -303,58 +310,66 @@ pub(crate) unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> boo
     let scatter_hi_tbl = vld1q_u8(scatter_hi_idx.as_ptr());
     let hi_out = vqtbl1q_u8(hi_merged, scatter_hi_tbl);
 
-    // Combine and store 16 bytes (decode_neon reserves extra output space,
-    // so 3 bytes of overwrite into spare capacity are safe).
+    // Combine and store 16 bytes, of which 13 are data: the caller provides
+    // 3 bytes of slack (see `decode_blocks_neon`).
     let out128 = vorrq_u8(lo_out, hi_out);
     vst1q_u8(output, out128);
 
-    true
+    bad
 }
 
 // ---------------------------------------------------------------------------
-// Block-loop entry points
+// Batch entry points, used by the driver (spec 0010 §3, §5)
 // ---------------------------------------------------------------------------
+//
+// As in `x86.rs`: a batch is `lines` lines of `n` blocks, the encoded side
+// of line `l` at `l · stride`, the raw side contiguous.
 
+/// Encodes `lines` × `n` blocks of 13 bytes; line `l`'s characters go to
+/// `output + l · stride`.
+///
+/// # Safety
+/// `input` readable for `13 n · lines + 3` bytes (the kernel loads 16);
+/// every line's `16 n` output bytes writable.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn encode_neon(input: &[u8], output: &mut Vec<u8>) {
-    let full_blocks = input.len() / 13;
-    output.reserve(full_blocks * 16 + 16);
-
-    let mut pad_buf = [0u8; 16];
-    let spare = output.spare_capacity_mut();
-    let out_ptr = spare.as_mut_ptr() as *mut u8;
-
-    for i in 0..full_blocks {
-        let src = input.as_ptr().add(i * 13);
-        let remaining = input.len() - i * 13;
-        let src_ptr = if remaining >= 16 {
-            src
-        } else {
-            let copy_len = remaining.min(16);
-            core::ptr::copy_nonoverlapping(src, pad_buf.as_mut_ptr(), copy_len);
-            pad_buf.as_ptr()
-        };
-        encode_block_neon(src_ptr, out_ptr.add(i * 16));
-    }
-    output.set_len(output.len() + full_blocks * 16);
-}
-
-#[cfg(target_arch = "aarch64")]
-#[target_feature(enable = "neon")]
-pub(crate) unsafe fn decode_neon(input: &[u8], output: &mut Vec<u8>) -> bool {
-    let full_blocks = input.len() / 16;
-    output.reserve(full_blocks * 13 + 13);
-
-    let spare = output.spare_capacity_mut();
-    let out_ptr = spare.as_mut_ptr() as *mut u8;
-
-    for i in 0..full_blocks {
-        let src = input.as_ptr().add(i * 16);
-        if !decode_block_neon(src, out_ptr.add(i * 13)) {
-            return false;
+pub(crate) unsafe fn encode_lines_neon(
+    input: *const u8,
+    output: *mut u8,
+    stride: usize,
+    n: usize,
+    lines: usize,
+) {
+    for l in 0..lines {
+        let (src, dst) = (input.add(13 * n * l), output.add(stride * l));
+        for i in 0..n {
+            encode_block_neon(src.add(13 * i), dst.add(16 * i));
         }
     }
-    output.set_len(output.len() + full_blocks * 13);
-    true
+}
+
+/// Decodes `lines` × `n` blocks of 16 characters, line `l` read from
+/// `input + l · stride`, into contiguous output, and returns whether every
+/// block was valid. The output is written even for invalid blocks.
+///
+/// # Safety
+/// Every line's `16 n` input bytes readable; `output` writable for
+/// `13 n · lines + 3` (the kernel stores 16).
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+pub(crate) unsafe fn decode_lines_neon(
+    input: *const u8,
+    stride: usize,
+    output: *mut u8,
+    n: usize,
+    lines: usize,
+) -> bool {
+    let mut bad = vdupq_n_u8(0);
+    for l in 0..lines {
+        let (src, dst) = (input.add(stride * l), output.add(13 * n * l));
+        for i in 0..n {
+            bad = vorrq_u8(bad, decode_block_neon(src.add(16 * i), dst.add(13 * i)));
+        }
+    }
+    vmaxvq_u8(bad) == 0
 }

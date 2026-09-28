@@ -49,6 +49,9 @@ pub(crate) mod x86;
 pub(crate) mod aarch64;
 
 #[cfg(feature = "alloc")]
+mod driver;
+
+#[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
 // ---------------------------------------------------------------------------
@@ -241,38 +244,40 @@ pub fn decode_size_hint(encoded_len: usize) -> usize {
 /// Encode `input` using the SIMD fixed-width variant.
 ///
 /// Output begins with `-` then SIMD-alphabet characters.
-/// `wrap=0` means no line wrapping; otherwise `\n` is inserted after every
-/// `wrap` output characters (`wrap` must be a multiple of 32).
+/// `wrap=0` means no line wrapping; otherwise the payload is written in lines
+/// of `wrap` characters, each followed by `\n` (spec 0008 §3.4).
 /// `max_level` caps the SIMD kernel used; [`SimdLevel::default`] uses the best
 /// available.
+///
+/// # Panics
+/// If `wrap` is neither 0 nor a multiple of 32.
 #[cfg(feature = "alloc")]
 pub fn encode(input: &[u8], max_level: SimdLevel, wrap: usize) -> Vec<u8> {
-    if input.is_empty() {
-        return Vec::new();
-    }
-    let mut out = Vec::with_capacity(encode_size_hint(input.len(), wrap));
-    out.push(b'-');
-    encode_into(input, max_level, wrap, &mut out);
+    assert!(
+        wrap.is_multiple_of(32),
+        "line width must be 0 or a multiple of 32"
+    );
+    let mut core = driver::EncodeCore::new(effective_level(max_level), wrap);
+    let mut out = Vec::with_capacity(driver::EncodeCore::capacity(input.len(), wrap));
+    let spare = out.spare_capacity_mut();
+    let n = core.encode(input, spare);
+    let n = n + core.finish(&mut spare[n..]);
+    // SAFETY: the core initialized the first `n` bytes of the spare capacity.
+    unsafe { out.set_len(n) };
     out
 }
 
-/// Decode `input`, auto-detecting the format from the first byte.
+/// Decode `input`, auto-detecting the format (spec 0008 §2).
 ///
-/// A leading `-` indicates a SIMD fixed-width stream; anything else is decoded
-/// as a Henke stream.  Always succeeds (returns `Some`); invalid bytes in a
-/// SIMD stream silently corrupt output.  `max_level` caps the SIMD kernel used.
+/// After leading whitespace, a `-` indicates a SIMD fixed-width stream,
+/// decoded strictly (spec 0008 §3.5); anything else is decoded as a Henke
+/// stream. Returns `None` for an invalid SIMD stream. `max_level` caps the
+/// SIMD kernel used.
 #[cfg(feature = "alloc")]
 pub fn decode(input: &[u8], max_level: SimdLevel) -> Option<Vec<u8>> {
-    if input.is_empty() {
-        return Some(Vec::new());
-    }
-    if let Some(payload) = input.strip_prefix(b"-") {
-        let mut out = Vec::with_capacity(decode_size_hint(payload.len()));
-        decode_into(payload, max_level, &mut out);
-        Some(out)
-    } else {
-        Some(crate::decode(input))
-    }
+    let mut decoder = Decoder::new(max_level);
+    let mut out = Vec::new();
+    (decoder.decode_inner(input, &mut out) && decoder.finish_inner(&mut out)).then_some(out)
 }
 
 /// Encode `input` into a caller-provided buffer without bounds checking.
@@ -325,182 +330,6 @@ pub unsafe fn decode_unchecked(input: &[u8], max_level: SimdLevel, output: *mut 
 }
 
 // ---------------------------------------------------------------------------
-// Internal dispatch helpers
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "alloc")]
-fn encode_into(input: &[u8], max_level: SimdLevel, wrap: usize, output: &mut Vec<u8>) {
-    match effective_level(max_level) {
-        #[cfg(target_arch = "x86_64")]
-        ArchLevel::Avx2 => {
-            let full = (input.len() / 26) * 26;
-            unsafe { x86::encode_avx2(&input[..full], output) };
-            // Handle 13–25 byte tail with SSE4.1 before falling to scalar.
-            let tail = &input[full..];
-            let sse_full = (tail.len() / 13) * 13;
-            if sse_full > 0 {
-                unsafe { x86::encode_sse41(&tail[..sse_full], output) };
-            }
-            let mut sc = scalar::ScalarEncoder::new();
-            sc.encode(&tail[sse_full..], output);
-            sc.finish(output);
-        }
-        #[cfg(target_arch = "x86_64")]
-        ArchLevel::Sse41 => {
-            let full = (input.len() / 13) * 13;
-            unsafe { x86::encode_sse41(&input[..full], output) };
-            let mut sc = scalar::ScalarEncoder::new();
-            sc.encode(&input[full..], output);
-            sc.finish(output);
-        }
-        #[cfg(target_arch = "aarch64")]
-        ArchLevel::Neon => {
-            let full = (input.len() / 13) * 13;
-            unsafe { aarch64::encode_neon(&input[..full], output) };
-            let mut sc = scalar::ScalarEncoder::new();
-            sc.encode(&input[full..], output);
-            sc.finish(output);
-        }
-        ArchLevel::Scalar => {
-            let mut sc = scalar::ScalarEncoder::new();
-            sc.encode(input, output);
-            sc.finish(output);
-        }
-    }
-    // Insert wrap newlines if requested (post-payload, after the '-' prefix byte).
-    if wrap > 0 && output.len() > 1 {
-        insert_wrap_newlines(output, wrap);
-    }
-}
-
-/// Decodes the longest prefix of `input` made of whole 16-character blocks
-/// with the SIMD kernels, and returns its length (0 at the scalar level).
-/// `None` if a kernel rejected its input. Used by the streaming decoder.
-#[cfg(feature = "alloc")]
-fn decode_blocks(input: &[u8], max_level: SimdLevel, output: &mut Vec<u8>) -> Option<usize> {
-    match effective_level(max_level) {
-        #[cfg(target_arch = "x86_64")]
-        ArchLevel::Avx2 => {
-            let full = (input.len() / 32) * 32;
-            if !unsafe { x86::decode_avx2(&input[..full], output) } {
-                return None;
-            }
-            let sse_full = ((input.len() - full) / 16) * 16;
-            if sse_full > 0 && !unsafe { x86::decode_sse41(&input[full..full + sse_full], output) }
-            {
-                return None;
-            }
-            Some(full + sse_full)
-        }
-        #[cfg(target_arch = "x86_64")]
-        ArchLevel::Sse41 => {
-            let full = (input.len() / 16) * 16;
-            if !unsafe { x86::decode_sse41(&input[..full], output) } {
-                return None;
-            }
-            Some(full)
-        }
-        #[cfg(target_arch = "aarch64")]
-        ArchLevel::Neon => {
-            let full = (input.len() / 16) * 16;
-            if !unsafe { aarch64::decode_neon(&input[..full], output) } {
-                return None;
-            }
-            Some(full)
-        }
-        ArchLevel::Scalar => Some(0),
-    }
-}
-
-#[cfg(feature = "alloc")]
-fn decode_into(input: &[u8], max_level: SimdLevel, output: &mut Vec<u8>) -> bool {
-    // Strip any \n bytes (inserted by --wrap during encoding) before dispatching
-    // to SIMD kernels, which do not tolerate non-alphabet bytes in their input.
-    // The scalar decoder handles them inline, but we normalise here so all paths
-    // see clean payload bytes.
-    if input.contains(&b'\n') {
-        let clean: Vec<u8> = input.iter().copied().filter(|&b| b != b'\n').collect();
-        return decode_into(&clean, max_level, output);
-    }
-    match effective_level(max_level) {
-        #[cfg(target_arch = "x86_64")]
-        ArchLevel::Avx2 => {
-            let full = (input.len() / 32) * 32;
-            if !unsafe { x86::decode_avx2(&input[..full], output) } {
-                return false;
-            }
-            // Handle 16–31 char tail with SSE4.1 before falling to scalar.
-            let tail = &input[full..];
-            let sse_full = (tail.len() / 16) * 16;
-            if sse_full > 0 && !unsafe { x86::decode_sse41(&tail[..sse_full], output) } {
-                return false;
-            }
-            let mut sc = scalar::ScalarDecoder::new();
-            sc.decode(&tail[sse_full..], output);
-            sc.finish(output);
-            true
-        }
-        #[cfg(target_arch = "x86_64")]
-        ArchLevel::Sse41 => {
-            let full = (input.len() / 16) * 16;
-            if !unsafe { x86::decode_sse41(&input[..full], output) } {
-                return false;
-            }
-            let mut sc = scalar::ScalarDecoder::new();
-            sc.decode(&input[full..], output);
-            sc.finish(output);
-            true
-        }
-        #[cfg(target_arch = "aarch64")]
-        ArchLevel::Neon => {
-            let full = (input.len() / 16) * 16;
-            if !unsafe { aarch64::decode_neon(&input[..full], output) } {
-                return false;
-            }
-            let mut sc = scalar::ScalarDecoder::new();
-            sc.decode(&input[full..], output);
-            sc.finish(output);
-            true
-        }
-        ArchLevel::Scalar => {
-            let mut sc = scalar::ScalarDecoder::new();
-            sc.decode(input, output);
-            sc.finish(output);
-            true
-        }
-    }
-}
-
-/// Wraps the payload that follows the leading `-` (spec 0008 §3.4).
-///
-/// Output layout: `-` LF, then the payload in lines of exactly `wrap`
-/// characters (the last one 1 to `wrap` characters), every line followed by
-/// LF, the last one included: 1 + ⌈payload / wrap⌉ newlines in all. Needs a
-/// non-empty payload.
-#[cfg(feature = "alloc")]
-fn insert_wrap_newlines(output: &mut Vec<u8>, wrap: usize) {
-    let payload_len = output.len() - 1;
-    let lines = payload_len.div_ceil(wrap);
-    output.resize(output.len() + 1 + lines, 0);
-    let buf = output.as_mut_slice();
-    // Move the lines right, last one first, each to its final place followed
-    // by its LF. Every move goes rightward, so nothing unread is overwritten.
-    let mut dst_end = buf.len();
-    let mut src_end = 1 + payload_len;
-    let mut len = payload_len - (lines - 1) * wrap;
-    while src_end > 1 {
-        dst_end -= 1;
-        buf[dst_end] = b'\n';
-        buf.copy_within(src_end - len..src_end, dst_end - len);
-        dst_end -= len;
-        src_end -= len;
-        len = wrap;
-    }
-    debug_assert_eq!(dst_end, 2);
-    buf[1] = b'\n';
-}
-
-// ---------------------------------------------------------------------------
 // Streaming encoder
 // ---------------------------------------------------------------------------
 
@@ -511,82 +340,33 @@ fn insert_wrap_newlines(output: &mut Vec<u8>, wrap: usize) {
 /// that only sees empty input produces the empty stream, like [`encode`].
 #[cfg(feature = "alloc")]
 pub struct Encoder {
-    scalar: scalar::ScalarEncoder,
-    max_level: SimdLevel,
-    prefix_written: bool,
+    core: driver::EncodeCore,
 }
 
 #[cfg(feature = "alloc")]
 impl Encoder {
     pub fn new(max_level: SimdLevel) -> Self {
         Self {
-            scalar: scalar::ScalarEncoder::new(),
-            max_level,
-            prefix_written: false,
+            core: driver::EncodeCore::new(effective_level(max_level), 0),
         }
     }
 
     /// Encode `input`, appending SIMD-variant characters to `output`.
     /// Writes the `-` prefix with the first non-empty input.
     pub fn encode(&mut self, input: &[u8], output: &mut Vec<u8>) {
-        if input.is_empty() {
-            return;
-        }
-        if !self.prefix_written {
-            output.push(b'-');
-            self.prefix_written = true;
-        }
-        // If there are pending carry bits from the previous chunk, drain them
-        // through the scalar encoder until alignment (nbits==0) is restored,
-        // then let SIMD process the remaining aligned bytes.
-        //
-        // nbits=0 is only reached at 13-byte block boundaries (104 bits = 8×13).
-        // In the worst case (nbits=1 on entry) up to 12 bytes must be consumed
-        // before the next block boundary restores alignment.
-        let input = if !self.scalar.is_aligned() {
-            let mut i = 0;
-            while i < input.len() && !self.scalar.is_aligned() {
-                self.scalar.encode(&input[i..i + 1], output);
-                i += 1;
-            }
-            &input[i..]
-        } else {
-            input
-        };
-
-        match effective_level(self.max_level) {
-            #[cfg(target_arch = "x86_64")]
-            ArchLevel::Avx2 => {
-                let full = (input.len() / 26) * 26;
-                unsafe { x86::encode_avx2(&input[..full], output) };
-                let tail = &input[full..];
-                let sse_full = (tail.len() / 13) * 13;
-                if sse_full > 0 {
-                    unsafe { x86::encode_sse41(&tail[..sse_full], output) };
-                }
-                self.scalar.encode(&tail[sse_full..], output);
-            }
-            #[cfg(target_arch = "x86_64")]
-            ArchLevel::Sse41 => {
-                let full = (input.len() / 13) * 13;
-                unsafe { x86::encode_sse41(&input[..full], output) };
-                self.scalar.encode(&input[full..], output);
-            }
-            #[cfg(target_arch = "aarch64")]
-            ArchLevel::Neon => {
-                let full = (input.len() / 13) * 13;
-                unsafe { aarch64::encode_neon(&input[..full], output) };
-                self.scalar.encode(&input[full..], output);
-            }
-            ArchLevel::Scalar => {
-                self.scalar.encode(input, output);
-            }
-        }
+        output.reserve(driver::EncodeCore::capacity(input.len(), 0));
+        let n = self.core.encode(input, output.spare_capacity_mut());
+        // SAFETY: the core initialized the first `n` bytes of the spare
+        // capacity.
+        unsafe { output.set_len(output.len() + n) };
     }
 
     /// Flush remaining bits (0–2 chars).
-    pub fn finish(self, output: &mut Vec<u8>) {
-        self.scalar.finish(output);
+    pub fn finish(mut self, output: &mut Vec<u8>) {
+        output.reserve(driver::EncodeCore::capacity(0, 0));
+        let n = self.core.finish(output.spare_capacity_mut());
+        // SAFETY: as in `encode`.
+        unsafe { output.set_len(output.len() + n) };
     }
 }
 
@@ -601,91 +381,103 @@ impl Default for Encoder {
 // Streaming decoder
 // ---------------------------------------------------------------------------
 
-/// Stateful SIMD fixed-width decoder. Auto-detects Henke vs SIMD from first byte.
+/// Stateful decoder. Auto-detects the format (spec 0008 §2): after leading
+/// whitespace, `-` selects the SIMD variant, decoded strictly; anything else
+/// the Henke format.
 #[cfg(feature = "alloc")]
 pub struct Decoder {
-    scalar: scalar::ScalarDecoder,
     max_level: SimdLevel,
-    format_detected: bool,
-    is_simd: bool,
-    henke: Option<crate::Decoder>,
+    mode: DecoderMode,
+}
+
+#[cfg(feature = "alloc")]
+enum DecoderMode {
+    /// Only whitespace so far; `offset` bytes of it.
+    Undecided {
+        offset: usize,
+    },
+    Simd(driver::DecodeCore),
+    Henke(crate::Decoder),
 }
 
 #[cfg(feature = "alloc")]
 impl Decoder {
     pub fn new(max_level: SimdLevel) -> Self {
         Self {
-            scalar: scalar::ScalarDecoder::new(),
             max_level,
-            format_detected: false,
-            is_simd: false,
-            henke: None,
+            mode: DecoderMode::Undecided { offset: 0 },
         }
     }
 
     /// Decode `input`, appending bytes to `output`.
-    /// Detects format from the first byte. Returns `false` on invalid characters.
+    /// Returns `false` once the SIMD stream is invalid (spec 0008 §3.5).
     pub fn decode(&mut self, input: &[u8], output: &mut Vec<u8>) -> bool {
-        if input.is_empty() {
-            return true;
-        }
-        if !self.format_detected {
-            self.format_detected = true;
-            if let Some(payload) = input.strip_prefix(b"-") {
-                self.is_simd = true;
-                return self.decode_simd(payload, output);
-            } else {
-                self.is_simd = false;
-                self.henke = Some(crate::Decoder::new());
-                self.henke.as_mut().unwrap().decode(input, output);
+        self.decode_inner(input, output)
+    }
+
+    /// Flush the last bytes. An invalid SIMD stream (including an invalid
+    /// payload length, only known here) adds nothing.
+    pub fn finish(mut self, output: &mut Vec<u8>) {
+        self.finish_inner(output);
+    }
+
+    fn decode_inner(&mut self, input: &[u8], output: &mut Vec<u8>) -> bool {
+        let mut input = input;
+        if let DecoderMode::Undecided { offset } = self.mode {
+            let Some(p) = input.iter().position(|&b| !driver::is_whitespace(b)) else {
+                self.mode = DecoderMode::Undecided {
+                    offset: offset + input.len(),
+                };
                 return true;
+            };
+            if input[p] == b'-' {
+                let level = effective_level(self.max_level);
+                self.mode = DecoderMode::Simd(driver::DecodeCore::new(level, offset + p + 1));
+                input = &input[p + 1..];
+            } else {
+                self.mode = DecoderMode::Henke(crate::Decoder::new());
+                input = &input[p..];
             }
         }
-        if self.is_simd {
-            self.decode_simd(input, output)
-        } else {
-            self.henke.as_mut().unwrap().decode(input, output);
-            true
+        match &mut self.mode {
+            DecoderMode::Undecided { .. } => true,
+            DecoderMode::Simd(core) => {
+                output.reserve(driver::DecodeCore::capacity(input.len()) + 16);
+                match core.decode(input, output.spare_capacity_mut()) {
+                    Ok(n) => {
+                        // SAFETY: the core initialized the first `n` bytes of
+                        // the spare capacity.
+                        unsafe { output.set_len(output.len() + n) };
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }
+            DecoderMode::Henke(decoder) => {
+                decoder.decode(input, output);
+                true
+            }
         }
     }
 
-    /// SIMD payload characters, possibly wrapped: each `\n`-separated
-    /// segment in turn, with the state carried across segments and chunks
-    /// (spec 0006 §2).
-    fn decode_simd(&mut self, input: &[u8], output: &mut Vec<u8>) -> bool {
-        // Unwrapped streams have no newline: skip the split, whose byte-wise
-        // scan costs more than the SIMD kernels (`contains` is a memchr).
-        if !input.contains(&b'\n') {
-            return self.decode_segment(input, output);
-        }
-        input
-            .split(|&b| b == b'\n')
-            .all(|segment| self.decode_segment(segment, output))
-    }
-
-    /// One run of payload characters without newlines.
-    fn decode_segment(&mut self, segment: &[u8], output: &mut Vec<u8>) -> bool {
-        // Drain to a block boundary (at most 15 characters), so that the
-        // kernels start aligned.
-        let mut i = 0;
-        while i < segment.len() && !self.scalar.is_aligned() {
-            self.scalar.decode(&segment[i..i + 1], output);
-            i += 1;
-        }
-        let rest = &segment[i..];
-        let Some(done) = decode_blocks(rest, self.max_level, output) else {
-            return false;
-        };
-        // Fewer than 16 characters: kept in the scalar state, not flushed.
-        self.scalar.decode(&rest[done..], output);
-        true
-    }
-
-    pub fn finish(self, output: &mut Vec<u8>) {
-        if self.is_simd {
-            self.scalar.finish(output);
-        } else if let Some(h) = self.henke {
-            h.finish(output);
+    fn finish_inner(&mut self, output: &mut Vec<u8>) -> bool {
+        match &mut self.mode {
+            DecoderMode::Undecided { .. } => true,
+            DecoderMode::Simd(core) => {
+                output.reserve(driver::DecodeCore::FINISH_CAPACITY);
+                match core.finish(output.spare_capacity_mut()) {
+                    Ok(n) => {
+                        // SAFETY: as in `decode_inner`.
+                        unsafe { output.set_len(output.len() + n) };
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }
+            DecoderMode::Henke(decoder) => {
+                core::mem::take(decoder).finish(output);
+                true
+            }
         }
     }
 }
@@ -796,6 +588,114 @@ mod tests {
             }
             enc.finish(&mut out);
             assert_eq!(out, reference, "chunk_size={chunk_size}");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Kernel validation (spec 0010 §5, §7)
+    // -----------------------------------------------------------------------
+
+    /// A batch decode kernel: input, stride, output, blocks (or units) per
+    /// line, lines.
+    type BlockFn = unsafe fn(*const u8, usize, *mut u8, usize, usize) -> bool;
+
+    /// The decode block kernels this CPU can run, with their input width.
+    fn decode_kernels() -> Vec<(&'static str, usize, BlockFn)> {
+        let candidates: [(&'static str, usize, BlockFn, bool); ARCH_KERNELS] = [
+            #[cfg(target_arch = "x86_64")]
+            (
+                "sse41",
+                16,
+                x86::decode_lines_sse41,
+                std::is_x86_feature_detected!("sse4.1") && std::is_x86_feature_detected!("ssse3"),
+            ),
+            #[cfg(target_arch = "x86_64")]
+            (
+                "avx2",
+                32,
+                x86::decode_lines_avx2,
+                std::is_x86_feature_detected!("avx2"),
+            ),
+            #[cfg(target_arch = "aarch64")]
+            (
+                "neon",
+                16,
+                aarch64::decode_lines_neon,
+                std::arch::is_aarch64_feature_detected!("neon"),
+            ),
+        ];
+        candidates
+            .into_iter()
+            .filter(|&(_, _, _, available)| available)
+            .map(|(name, width, kernel, _)| (name, width, kernel))
+            .collect()
+    }
+
+    /// Number of decode kernels compiled for this architecture.
+    const ARCH_KERNELS: usize = if cfg!(target_arch = "x86_64") {
+        2
+    } else if cfg!(target_arch = "aarch64") {
+        1
+    } else {
+        0
+    };
+
+    fn in_alphabet(b: u8) -> bool {
+        matches!(b, 0x23..=0x26 | 0x28..=0x7E)
+    }
+
+    /// Runs `kernel` on one block (or AVX2 unit): the first `width` bytes of
+    /// `block`.
+    fn run(kernel: BlockFn, block: &[u8]) -> bool {
+        // The kernels store up to 32 bytes; the output is not inspected.
+        let mut out = [0u8; 64];
+        // SAFETY: the caller detected the kernel's CPU features;
+        // `block` holds the kernel's input width, `out` more than it writes.
+        unsafe { kernel(block.as_ptr(), 0, out.as_mut_ptr(), 1, 1) }
+    }
+
+    /// Two characters encoding the pair value `v` (low index first).
+    fn pair(v: u32) -> [u8; 2] {
+        [
+            scalar::enc_char((v % 91) as u8),
+            scalar::enc_char((v / 91) as u8),
+        ]
+    }
+
+    #[test]
+    fn kernels_reject_every_byte_outside_the_alphabet() {
+        let input: Vec<u8> = (0u8..=255).cycle().take(26).collect();
+        let valid = encode(&input, SimdLevel::Scalar, 0);
+        for (name, width, kernel) in decode_kernels() {
+            let block = &valid[1..1 + width];
+            assert!(run(kernel, block), "{name}: valid block rejected");
+            for pos in 0..width {
+                for b in (0u8..=255).filter(|&b| !in_alphabet(b)) {
+                    let mut bad = block.to_vec();
+                    bad[pos] = b;
+                    assert!(
+                        !run(kernel, &bad),
+                        "{name}: byte {b:#04x} at {pos} accepted"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn kernels_reject_pairs_above_8191() {
+        let input: Vec<u8> = (0u8..=255).cycle().take(26).collect();
+        let valid = encode(&input, SimdLevel::Scalar, 0);
+        for (name, width, kernel) in decode_kernels() {
+            let block = &valid[1..1 + width];
+            for k in 0..width / 2 {
+                let mut bad = block.to_vec();
+                for v in 0..=90 + 90 * 91 {
+                    bad[2 * k..2 * k + 2].copy_from_slice(&pair(v));
+                    let accepted = run(kernel, &bad);
+                    assert!(accepted == (v <= 8191), "{name}: pair {k} worth {v}");
+                }
+            }
         }
     }
 }

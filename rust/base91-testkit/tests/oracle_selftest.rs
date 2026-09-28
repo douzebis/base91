@@ -265,15 +265,17 @@ fn reject_terminator_inside_unwrapped_payload() {
 
 #[test]
 fn reject_width_16() {
-    // Two lines of 16: W = 16 is not a multiple of 32.
+    // Two lines of 16: W = 16 is not a multiple of 32, which shows where
+    // the second line starts.
     let s = stream(&[b"-\n", &repeat(b'#', 16), b"\n", &repeat(b'#', 16), b"\n"]);
-    assert_eq!(decode(&s), Err(DecodeError::InvalidLayout { offset: 2 }));
+    assert_eq!(decode(&s), Err(DecodeError::InvalidLayout { offset: 19 }));
 }
 
 #[test]
 fn reject_last_line_longer_than_width() {
+    // The 33rd character of the second line, where a terminator was due.
     let s = stream(&[b"-\n", &repeat(b'#', 32), b"\n", &repeat(b'#', 33), b"\n"]);
-    assert_eq!(decode(&s), Err(DecodeError::InvalidLayout { offset: 35 }));
+    assert_eq!(decode(&s), Err(DecodeError::InvalidLayout { offset: 67 }));
 }
 
 #[test]
@@ -294,6 +296,90 @@ fn reject_mixed_terminators() {
 fn reject_pair_value_above_8191() {
     // '~' is index 90: 90 + 91 * 90 = 8280 > 8191.
     assert_eq!(decode(b"-~~"), Err(DecodeError::InvalidValue { offset: 1 }));
+}
+
+#[test]
+fn reject_pair_value_above_8191_at_its_stream_offset() {
+    // In a wrapped stream the offset counts the terminators too: the pair
+    // starts at 2 + 32 + 1 = 35, not at its payload index.
+    let s = stream(&[b"-\n", &repeat(b'#', 32), b"\n~~\n"]);
+    assert_eq!(decode(&s), Err(DecodeError::InvalidValue { offset: 35 }));
+}
+
+// ---------------------------------------------------------------------------
+// §3.5 Which error is reported
+// ---------------------------------------------------------------------------
+
+#[test]
+fn whitespace_is_judged_when_content_follows() {
+    // Trailing whitespace of any kind is accepted.
+    assert_eq!(decode(b"-##  \t\r\n \n"), Ok(vec![0]));
+    assert_eq!(decode(b"-\n\n"), Ok(Vec::new()));
+    assert_eq!(decode(b"-\r\n\r\n"), Ok(Vec::new()));
+    // Followed by content, the run fails at its first byte: a space is an
+    // invalid character, a terminator an invalid layout.
+    assert_eq!(
+        decode(b"-##  \n##"),
+        Err(DecodeError::InvalidCharacter { offset: 3 })
+    );
+    assert_eq!(
+        decode(b"-##\n  ##"),
+        Err(DecodeError::InvalidLayout { offset: 3 })
+    );
+    // Inside a wrapped line.
+    let s = stream(&[b"-\n", &repeat(b'#', 16), b" ", &repeat(b'#', 16)]);
+    assert_eq!(
+        decode(&s),
+        Err(DecodeError::InvalidCharacter { offset: 18 })
+    );
+    // An empty first line followed by content.
+    assert_eq!(
+        decode(b"-\n\n##"),
+        Err(DecodeError::InvalidLayout { offset: 2 })
+    );
+}
+
+#[test]
+fn short_line_fails_where_the_next_line_starts() {
+    // Line 2 has 10 characters but is not the last: the error is at the
+    // first byte of line 3, 2 + 33 + 11 = 46.
+    let s = stream(&[
+        b"-\n",
+        &repeat(b'#', 32),
+        b"\n",
+        &repeat(b'#', 10),
+        b"\n",
+        &repeat(b'#', 32),
+    ]);
+    assert_eq!(decode(&s), Err(DecodeError::InvalidLayout { offset: 46 }));
+}
+
+#[test]
+fn earliest_error_wins() {
+    // The short line (error at 46) comes before the invalid character in
+    // the next line (at 50).
+    let s = stream(&[
+        b"-\n",
+        &repeat(b'#', 32),
+        b"\n",
+        &repeat(b'#', 10),
+        b"\n####\"",
+        &repeat(b'#', 27),
+    ]);
+    assert_eq!(decode(&s), Err(DecodeError::InvalidLayout { offset: 46 }));
+    // An invalid value (at 1) before an invalid character (at 5).
+    assert_eq!(
+        decode(b"-~~##\"#"),
+        Err(DecodeError::InvalidValue { offset: 1 })
+    );
+}
+
+#[test]
+fn structure_before_content() {
+    // A full line followed by a byte that is neither a terminator nor in
+    // the alphabet: the layout error wins.
+    let s = stream(&[b"-\n", &repeat(b'#', 32), b"\n", &repeat(b'#', 32), b"\""]);
+    assert_eq!(decode(&s), Err(DecodeError::InvalidLayout { offset: 67 }));
 }
 
 // ---------------------------------------------------------------------------

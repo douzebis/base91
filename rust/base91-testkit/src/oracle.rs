@@ -32,9 +32,9 @@ pub enum Classification {
 
 /// Why a SIMD stream is rejected (§3.5).
 ///
-/// `offset` is the position in the whole input of the first byte that makes
-/// the stream invalid, scanning left to right. Implementations are not
-/// required to report offsets (§3.5), so tests compare the error class only.
+/// The error is the first one reading left to right, and `offset` is the
+/// position in the whole input that §3.5 "Which error is reported" assigns
+/// to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodeError {
     /// A byte that is neither an alphabet character nor part of a valid
@@ -158,123 +158,121 @@ pub fn decode(stream: &[u8]) -> Result<Vec<u8>, DecodeError> {
     };
     assert_eq!(stream[dash], b'-', "legacy stream given to the SIMD oracle");
 
-    // Everything after `-`, without the trailing whitespace (§3.5).
-    let start = dash + 1;
-    let end = stream
-        .iter()
-        .rposition(|b| !WHITESPACE.contains(b))
-        .map_or(start, |i| (i + 1).max(start));
-    let body = &stream[start..end];
-    if body.is_empty() {
-        // `-` alone, or `-` followed only by whitespace.
-        return Ok(Vec::new());
-    }
-
-    let payload = if body[0] == b'\n' || body.starts_with(b"\r\n") {
-        parse_wrapped(stream, start)?
+    // The header TERM, if any, makes the stream wrapped (§3.4).
+    let after = dash + 1;
+    let term: Option<&[u8]> = if stream[after..].starts_with(b"\n") {
+        Some(b"\n")
+    } else if stream[after..].starts_with(b"\r\n") {
+        Some(b"\r\n")
     } else {
-        parse_unwrapped(stream, start, end)?
+        None
     };
-    decode_payload(&payload, start)
+    let start = after + term.map_or(0, <[u8]>::len);
+    let payload = scan(stream, start, term)?;
+    decode_payload(&payload)
 }
 
-/// Payload characters of an unwrapped stream whose body is
-/// `stream[start..end]`.
-fn parse_unwrapped(stream: &[u8], start: usize, end: usize) -> Result<Vec<u8>, DecodeError> {
-    for (offset, &c) in stream.iter().enumerate().take(end).skip(start) {
-        // A line terminator inside an unwrapped payload is a layout error; a
-        // CR that does not start a CR LF is just an invalid character.
-        if c == b'\n' || (c == b'\r' && stream.get(offset + 1) == Some(&b'\n')) {
-            return Err(DecodeError::InvalidLayout { offset });
-        }
-        if index_of(c).is_none() {
-            return Err(DecodeError::InvalidCharacter { offset });
-        }
-    }
-    Ok(stream[start..end].to_vec())
+/// Whether a terminator (LF, or CR LF) starts at `stream[i]`.
+fn starts_terminator(stream: &[u8], i: usize) -> bool {
+    stream[i] == b'\n' || stream[i..].starts_with(b"\r\n")
 }
 
-/// Payload characters of a wrapped stream whose first terminator starts at
-/// `start` (§3.5 grammar: TERM line (TERM line)* [whitespace]).
-fn parse_wrapped(stream: &[u8], start: usize) -> Result<Vec<u8>, DecodeError> {
-    let term: &[u8] = if stream[start] == b'\n' {
-        b"\n"
+/// The error for a whitespace run followed by non-whitespace, at the run's
+/// byte `i` (§3.5 "Which error is reported", rule 1).
+fn run_error(stream: &[u8], i: usize) -> DecodeError {
+    if starts_terminator(stream, i) {
+        DecodeError::InvalidLayout { offset: i }
     } else {
-        b"\r\n"
-    };
-    let end = stream
-        .iter()
-        .rposition(|b| !WHITESPACE.contains(b))
-        .map_or(start, |i| i + 1);
+        DecodeError::InvalidCharacter { offset: i }
+    }
+}
 
-    // Split stream[start + term.len() .. end] into lines on `term`, checking
-    // every byte on the way.
-    let mut lines: Vec<(usize, Vec<u8>)> = Vec::new(); // (offset of line start, chars)
-    let mut line_start = start + term.len();
-    let mut line = Vec::new();
-    let mut i = line_start;
-    while i < end {
-        if stream[i..].starts_with(term) {
-            lines.push((line_start, std::mem::take(&mut line)));
-            i += term.len();
-            line_start = i;
+/// Reads the payload of a SIMD stream from `stream[start..]`, left to right,
+/// and returns its characters with their offsets. `term` is the stream's
+/// terminator if it is wrapped. Applies rules 1 to 5 of §3.5 "Which error
+/// is reported", in stream order; rule 6 (the length) is left to the
+/// caller.
+fn scan(stream: &[u8], start: usize, term: Option<&[u8]>) -> Result<Vec<(usize, u8)>, DecodeError> {
+    let mut payload: Vec<(usize, u8)> = Vec::new();
+    // Wrapped only: the length of the current line, of the first line once
+    // known, and whether a line has been completed yet.
+    let mut line = 0usize;
+    let mut width: Option<usize> = None;
+    let mut lines_done = 0usize;
+    // Start of the pending whitespace run.
+    let mut run: Option<usize> = None;
+
+    for (i, &c) in stream.iter().enumerate().skip(start) {
+        if WHITESPACE.contains(&c) {
+            run.get_or_insert(i);
             continue;
         }
-        let c = stream[i];
-        if c == b'\n' || (c == b'\r' && stream.get(i + 1) == Some(&b'\n')) {
-            // A terminator of the other kind: mixed LF / CR LF.
-            return Err(DecodeError::InvalidLayout { offset: i });
+        // A non-whitespace byte: judge the pending run (rule 1).
+        let mut new_line = false;
+        if let Some(r) = run.take() {
+            match term {
+                Some(t) if line > 0 && stream[r..i] == *t => new_line = true,
+                Some(t) if line > 0 && stream[r..].starts_with(t) => {
+                    return Err(run_error(stream, r + t.len()));
+                }
+                _ => return Err(run_error(stream, r)),
+            }
         }
+        if term.is_some() {
+            // Rule 2, then rule 3: structure before content.
+            if new_line {
+                let w = *width.get_or_insert(line);
+                if lines_done == 0 && !(w > 0 && w.is_multiple_of(32)) {
+                    return Err(DecodeError::InvalidLayout { offset: i });
+                }
+                if line != w {
+                    return Err(DecodeError::InvalidLayout { offset: i });
+                }
+                lines_done += 1;
+                line = 0;
+            }
+            if width.is_some_and(|w| line == w) {
+                return Err(DecodeError::InvalidLayout { offset: i });
+            }
+            line += 1;
+        }
+        // Rule 4.
         if index_of(c).is_none() {
             return Err(DecodeError::InvalidCharacter { offset: i });
         }
-        line.push(c);
-        i += 1;
-    }
-    lines.push((line_start, line));
-
-    // Line lengths: all but the last equal to W, W a positive multiple of
-    // 32, last line 1..=W. With a single line, any nonzero length.
-    let width = lines[0].1.len();
-    for (k, (offset, chars)) in lines.iter().enumerate() {
-        let is_last = k + 1 == lines.len();
-        let ok = if lines.len() == 1 {
-            !chars.is_empty()
-        } else if is_last {
-            !chars.is_empty() && chars.len() <= width
-        } else {
-            width > 0 && width.is_multiple_of(32) && chars.len() == width
-        };
-        if !ok {
-            return Err(DecodeError::InvalidLayout { offset: *offset });
+        payload.push((i, c));
+        // Rule 5: a pair is complete at its second character.
+        if payload.len().is_multiple_of(2) {
+            let (lo_at, lo) = payload[payload.len() - 2];
+            let value = index_of(lo).unwrap() + 91 * index_of(c).unwrap();
+            if value > 8191 {
+                return Err(DecodeError::InvalidValue { offset: lo_at });
+            }
         }
     }
-    Ok(lines.into_iter().flat_map(|(_, chars)| chars).collect())
+    // A pending run at the end is trailing whitespace, and the last line may
+    // be shorter than W: nothing more to check here.
+    Ok(payload)
 }
 
 /// Unpacks validated payload characters (§3.2 in reverse, §3.3).
 ///
-/// A character pair worth more than 8191 (values 8192..=8280 are
-/// expressible with two characters but not with 13 bits) is rejected as
-/// [`DecodeError::InvalidValue`] (§3.5, *invalid value*). Padding bits
+/// Pair values were checked by [`scan`] (a pair worth 8192..=8280 is
+/// expressible with two characters but not with 13 bits). Padding bits
 /// (§3.2 rule 4) are ignored, as §3.5 allows.
-fn decode_payload(payload: &[u8], offset_base: usize) -> Result<Vec<u8>, DecodeError> {
+fn decode_payload(payload: &[(usize, u8)]) -> Result<Vec<u8>, DecodeError> {
     let Some(n) = decoded_len(payload.len()) else {
         return Err(DecodeError::InvalidLength);
     };
 
     let mut bits: Vec<u32> = Vec::new();
-    for (k, pair) in payload.chunks(2).enumerate() {
-        let lo = index_of(pair[0]).expect("validated");
+    for pair in payload.chunks(2) {
+        let lo = index_of(pair[0].1).expect("validated");
         let value = match pair.get(1) {
-            Some(&c) => lo + 91 * index_of(c).expect("validated"),
+            Some(&(_, c)) => lo + 91 * index_of(c).expect("validated"),
             None => lo,
         };
-        if value > 8191 {
-            return Err(DecodeError::InvalidValue {
-                offset: offset_base + 2 * k,
-            });
-        }
+        assert!(value <= 8191, "checked by scan");
         bits.extend((0..13).map(|j| (value >> j) & 1));
     }
 

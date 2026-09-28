@@ -226,6 +226,46 @@ Silently truncating it to 13 bits, or letting its 14th bit spill into the
 next group, would both return wrong data. The check costs one comparison
 per pair (one vector compare per block).
 
+**Which error is reported.** A stream can contain several errors. The
+decoder reports the **first** one, reading left to right: the error at the
+earliest point where the stream stops being the beginning of any valid
+stream. This is the only rule compatible with chunking invariance (§3.6):
+a streaming decoder can report each error as soon as it sees it, and never
+has to hold one back in case an earlier-reported one turns up later.
+Precisely, reading the payload after `-` (and after the header TERM of a
+wrapped stream):
+
+1. **Whitespace is judged when non-whitespace follows it.** A run of
+   whitespace bytes might be trailing whitespace, which is valid, so it is
+   only an error once a non-whitespace byte follows it. In a wrapped
+   stream, a run that consists of exactly one TERM, right after a
+   non-empty line, is a line break. Any other run is an error at its first
+   byte that is not part of such a line break: *invalid layout* if that
+   byte starts a terminator (LF, or CR followed by LF), *invalid character*
+   otherwise. So `-AB CD` fails at the space, `-ABC` LF `DEF` fails
+   (invalid layout) at the LF, and a wrapped stream with an empty line
+   followed by more lines fails (invalid layout) at the empty line's
+   terminator.
+2. **Line lengths (wrapped) are checked where the next line starts**, since
+   until then a line might be the last one. When the first byte of a new
+   line arrives: if the previous line was the first, W is its length, and W
+   must be a positive multiple of 32; otherwise the previous line must be W
+   long. A line may never grow beyond W: the byte where a terminator was
+   expected is an error. These are *invalid layout* errors at the byte
+   that starts the new line or overflows the line.
+3. **Structure before content.** When a byte breaks rule 2 and is also not
+   an alphabet character, *invalid layout* is reported.
+4. **A byte outside the alphabet and outside whitespace** is an *invalid
+   character* at that byte.
+5. **A pair worth more than 8191** is an *invalid value*, reported at the
+   pair's first character, as soon as its second character is read.
+6. **The payload length** (*invalid length*) is checked last, at the end of
+   the stream, and has no position.
+
+Reporting the offset is still optional, but a decoder that reports one
+MUST report this one, and a decoder that reports no offset MUST still
+report this error's class.
+
 Decoders MAY also reject nonzero padding bits (§3.2 rule 4), but they are
 not required to check them.
 

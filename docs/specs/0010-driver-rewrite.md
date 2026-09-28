@@ -108,6 +108,24 @@ kernels. This spec replaces that loop.
 7. **The 3 % validation budget (§4) is measured once**, with a temporary
    patch that disables the checks (reverted, result recorded here), not
    with a permanent feature.
+
+   *Measured (2026-09-28, stage 1, 1 MiB, one pinned vCPU, two
+   alternating rounds):* the checks cost far more than 3 %, and every part
+   of them costs several percent:
+
+   | Checks | SSE4.1 decode | AVX2 decode |
+   |---|---|---|
+   | none | 222 µs | 194 µs |
+   | character range only | 238 µs | 209 µs |
+   | + `'` | 251 µs | 226 µs |
+   | + pairs above 8191 (all checks) | 278 µs (+25 %) | 251 µs (+29 %) |
+
+   Wrapped (W = 64, AVX2): 276 µs with the checks, 198 µs without
+   (+39 %). The cost is out of proportion to the handful of vector
+   operations involved, which points to the code-generation sensitivity
+   recorded in spec 0011. *Decided:* stage 1 ships with the checks as they
+   are (still faster than 0.2.3 everywhere, see *Stage 1 results*); the
+   3 % target moves to spec 0011.
 8. **Stage 1 maps errors onto today's API**: invalid input makes
    `simd::decode` return `None` and `simd::Decoder::decode` return `false`
    (instead of garbage) until stage 2 introduces `Result`. Only 0.3.0, with
@@ -252,6 +270,21 @@ its `contains(&b'\n')` scan (a temporary patch, reverted), same pinned
 CPU. The rewrite removes that scan (§3); the measurement says how much of
 the unwrapped speedup to expect from it.
 
+*Measured (2026-09-27, 0.2.3, 1 MiB input, one pinned vCPU, two
+alternating rounds):*
+
+| Level | With the scan | Without | Speedup |
+|---|---|---|---|
+| AVX2 | 297 µs | 200 µs | 1.48× |
+| SSE4.1 | 327 µs | 233 µs | 1.40× |
+| Scalar | 912 µs | 811 µs | 1.12× |
+
+The scan costs a constant ~97 µs per MiB (about 13 GB/s): `core`'s
+`memchr`, behind `<[u8]>::contains`, works a word at a time, not with
+SIMD. Removing it is worth about a third of the AVX2 decode time on its
+own. The unwrapped target of this spec is therefore not just "no
+regression" but this speedup.
+
 Measured with `tests/perf_sanity.rs` (`rust-perf`) and `criterion`, against
 0.2.3 on the same machine:
 - **Unwrapped:** no regression beyond noise (≤ 2 %), encode and decode.
@@ -333,6 +366,38 @@ spec 0011.
   SIMD encoding. `Deprecated`: `*_unchecked`.
 - Version 0.3.0 for `base91-rs`, `base91-cli` and `pybase91` (the latter
   unchanged in behavior).
+
+## Stage 1 results (2026-09-28)
+
+Against 0.2.3, 1 MiB, one pinned vCPU, with the strict checks:
+
+| | 0.2.3 | Stage 1 |
+|---|---|---|
+| decode, unwrapped: scalar / SSE4.1 / AVX2 | 905 / 323 / 294 µs | 853 / 273 / 245 µs |
+| decode, W = 64 (AVX2) | 1 686 µs | 274 µs (+12 % over unwrapped) |
+| encode, unwrapped: scalar / SSE4.1 / AVX2 | 1 029 / 331 / 324 µs | 809 / 335 / 329 µs |
+| encode, W = 64 (AVX2) | 482 µs | 357 µs (+8 % over unwrapped) |
+| streaming decode, unwrapped / W = 64 | 302 / 869 µs | 264 / ≈ 340 µs |
+
+- Unwrapped encode is within 2 % of 0.2.3 (SSE4.1 +1.2 %, AVX2 +1.5 %).
+- Wrapped decode misses the 10 % target by 2 points; the gap is
+  kernel-loop work and moves to spec 0011, with the validation budget
+  (decision 7).
+- The loop around each kernel is chosen per kernel by measurement (a flat
+  loop for AVX2, one out-of-line call per line for SSE4.1): see spec 0011,
+  *Code-generation sensitivity*.
+
+Two changes to the plan below:
+- **`Error` moved into stage 1.** The decoder core reports errors with
+  offsets from stage 1 on; making the type public at once (it is purely
+  additive, and §1 fixes its variants) avoids an internal type with fields
+  nothing reads yet. The `Result` signatures stay in stage 2.
+- **Spec 0008 §3.5 now says which error is reported** when a stream has
+  several (the first one, reading left to right, with a defined offset per
+  class), and the spec 0009 oracle implements it. Without it, "the
+  classes and offsets are the ones the oracle computes" (§1) would have
+  made the oracle's check order normative, and that order cannot be
+  implemented by a streaming decoder.
 
 ## Stages
 
