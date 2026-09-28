@@ -10,8 +10,10 @@
 //! cargo test --release -p base91-rs --test perf_sanity -- --ignored --nocapture
 //! ```
 //!
-//! Measures legacy and SIMD encode/decode throughput on 4 MB of seeded random
-//! data (median of 7 runs), prints a table, and asserts only **ratios**
+//! Measures legacy and SIMD encode/decode throughput on 512 KiB of seeded
+//! random data (fastest of 51 runs, after a warm-up run, into buffers
+//! allocated beforehand; input and output fit a 2 MB L2 cache), prints a
+//! table, and asserts only **ratios**
 //! between levels and layouts, which hold across machines far better than
 //! absolute numbers. Levels the CPU lacks are skipped and reported.
 
@@ -20,41 +22,57 @@ use base91_testkit::rng::Rng;
 use std::hint::black_box;
 use std::time::Instant;
 
-const SIZE: usize = 4 << 20;
-const RUNS: usize = 7;
+const SIZE: usize = 512 << 10;
+const RUNS: usize = 51;
 
 /// Minimum ratios (encode, decode), calibrated on the dev machine at 70 % of
 /// the lowest ratio measured over three runs (spec 0009, decision 6). Dev
-/// machine, 2026-09-27, x86_64 with AVX2, MB/s encode / decode:
+/// machine, 2026-09-28: Intel Core Ultra 7 165U, measured on a performance
+/// core (`taskset -c 8` in the dev VM), 0.3.0 driver (spec 0010), MB/s
+/// encode / decode, three runs:
 ///
 /// | | encode | decode |
 /// |---|---|---|
-/// | legacy | ~550 | ~490 |
-/// | Scalar, W=0 | ~1020 | ~1110 |
-/// | Simd128, W=0 | ~2390 | ~3100 |
-/// | Simd256, W=0 | 2090–2520 | ~3370 |
-/// | Simd256, W=64 | ~860 | ~550 |
+/// | legacy | 1040–1106 | 905–908 |
+/// | Scalar, W=0 | 3045–3106 | 2292–2328 |
+/// | Simd128, W=0 | 5123–5232 | 5795–5904 |
+/// | Simd256, W=0 | 9293–9880 | 7747–7763 |
+/// | Simd256, W=64 | 8242–8421 | 6407–6761 |
 ///
-/// Measured ratios: Simd128/Scalar 2.34 / 2.65–2.98; Simd256/Simd128
-/// 0.87–1.06 / 1.08–1.09; wrapped/unwrapped 0.34–0.41 / 0.16–0.17. The
-/// wrapping ratios are low because 0.2.2 wraps with a separate insertion
-/// pass and unwraps with a copy; raise them once spec 0008's in-place
-/// layout is implemented.
-const MIN_SIMD128_OVER_SCALAR: (f64, f64) = (1.64, 1.86);
-const MIN_SIMD256_OVER_SIMD128: (f64, f64) = (0.61, 0.76);
-const MIN_WRAPPED_OVER_UNWRAPPED: (f64, f64) = (0.24, 0.11);
+/// Ratios, lowest–highest: Simd128/Scalar 1.65–1.72 / 2.52–2.54;
+/// Simd256/Simd128 1.81–1.89 / 1.31–1.34; wrapped/unwrapped 0.85–0.89 /
+/// 0.83–0.87.
+///
+/// The Simd256/Simd128 thresholds are capped at 0.90 instead of 70 %:
+/// machines whose AVX2 units are half-width (efficiency cores, older AMD)
+/// run AVX2 at about the SSE4.1 speed, and the guard is only meant to catch
+/// AVX2 falling behind SSE4.1.
+///
+/// With these measurement conditions the ratios vary by a few hundredths
+/// between runs, so the guards catch a code-generation regression like the
+/// ones recorded in spec 0011 ("Code-generation sensitivity") when it moves
+/// a ratio by more than about a third.
+const MIN_SIMD128_OVER_SCALAR: (f64, f64) = (1.15, 1.76);
+const MIN_SIMD256_OVER_SIMD128: (f64, f64) = (0.90, 0.90);
+const MIN_WRAPPED_OVER_UNWRAPPED: (f64, f64) = (0.59, 0.58);
 
-/// Median throughput of `f` over `RUNS` runs, in MB/s of original data.
+/// Throughput of `f`, in MB/s of original data: the fastest of `RUNS`
+/// runs, after one warm-up run.
+///
+/// The minimum, not the median: for CPU-bound code it is the most
+/// repeatable figure (every disturbance only adds time). The functions
+/// timed write into buffers allocated and touched beforehand, so page
+/// faults on fresh allocations stay out of the measurement.
 fn throughput(mut f: impl FnMut() -> usize) -> f64 {
-    let mut rates: Vec<f64> = (0..RUNS)
+    black_box(f());
+    let best = (0..RUNS)
         .map(|_| {
             let start = Instant::now();
             black_box(f());
-            SIZE as f64 / start.elapsed().as_secs_f64() / 1e6
+            start.elapsed().as_secs_f64()
         })
-        .collect();
-    rates.sort_by(f64::total_cmp);
-    rates[RUNS / 2]
+        .fold(f64::INFINITY, f64::min);
+    SIZE as f64 / best / 1e6
 }
 
 struct Rates {
@@ -64,9 +82,11 @@ struct Rates {
 
 fn simd_rates(x: &[u8], level: SimdLevel, width: usize) -> Rates {
     let stream = simd::encode(x, level, width).unwrap();
+    let mut enc = vec![0u8; stream.len()];
+    let mut dec = vec![0u8; simd::decode_size_hint(stream.len())];
     Rates {
-        encode: throughput(|| simd::encode(black_box(x), level, width).unwrap().len()),
-        decode: throughput(|| simd::decode(black_box(&stream), level).unwrap().len()),
+        encode: throughput(|| simd::encode_slice(black_box(x), level, width, &mut enc).unwrap()),
+        decode: throughput(|| simd::decode_slice(black_box(&stream), level, &mut dec).unwrap()),
     }
 }
 
@@ -85,12 +105,14 @@ fn simd_levels_keep_their_relative_speed() {
     let best = simd::detect();
 
     let legacy_stream = base91::encode(&x);
+    let mut enc = vec![0u8; base91::encode_size_hint(x.len())];
+    let mut dec = vec![0u8; base91::decode_size_hint(legacy_stream.len())];
     let legacy = Rates {
-        encode: throughput(|| base91::encode(black_box(&x)).len()),
-        decode: throughput(|| base91::decode(black_box(&legacy_stream)).len()),
+        encode: throughput(|| base91::encode_slice(black_box(&x), &mut enc).unwrap()),
+        decode: throughput(|| base91::decode_slice(black_box(&legacy_stream), &mut dec).unwrap()),
     };
 
-    eprintln!("simd::detect() = {best:?}; MB/s of original data, median of {RUNS}");
+    eprintln!("simd::detect() = {best:?}; MB/s of original data, fastest of {RUNS}");
     eprintln!("  {:<24} {:>10} {:>10}", "", "encode", "decode");
     eprintln!(
         "  {:<24} {:>10.0} {:>10.0}",

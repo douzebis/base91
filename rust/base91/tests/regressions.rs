@@ -173,3 +173,118 @@ fn io_reader_one_byte_reads() {
         assert!(got == x, "n={}", x.len());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Spec 0010: strict SIMD decoding (spec 0008 annex A9–A13b)
+// ---------------------------------------------------------------------------
+
+/// `simd::decode` at every level, and the streaming decoder fed one byte at
+/// a time, all give `want`.
+fn assert_decodes(stream: &[u8], want: Result<Vec<u8>, base91::Error>) {
+    for level in LEVELS {
+        assert_eq!(simd::decode(stream, level), want, "one-shot, {level:?}");
+        let mut decoder = simd::Decoder::new(level);
+        let mut got = Vec::new();
+        let result = stream
+            .chunks(1)
+            .try_for_each(|b| decoder.decode(b, &mut got))
+            .and_then(|()| decoder.finish(&mut got))
+            .map(|()| got);
+        assert_eq!(result, want, "byte by byte, {level:?}");
+    }
+}
+
+/// A 64-character payload of 52 bytes, `-` excluded: four full blocks.
+fn payload() -> (Vec<u8>, Vec<u8>) {
+    let x = random(52);
+    let stream = oracle::encode(&x, 0);
+    (x, stream)
+}
+
+#[test]
+fn strict_decoder_accepts_cr_lf() {
+    // A9: CR LF terminators are accepted; 0.2.2 decoded the CR as data.
+    let x = random(200);
+    let lf = oracle::encode(&x, 64);
+    let crlf: Vec<u8> = lf
+        .iter()
+        .flat_map(|&b| {
+            if b == b'\n' {
+                vec![b'\r', b'\n']
+            } else {
+                vec![b]
+            }
+        })
+        .collect();
+    assert_decodes(&crlf, Ok(x));
+}
+
+#[test]
+fn strict_decoder_skips_whitespace_before_dash() {
+    // A10: whitespace before `-` is skipped; 0.2.2 classified the stream as
+    // legacy.
+    let (x, stream) = payload();
+    assert_decodes(&[&b" \t\n"[..], &stream].concat(), Ok(x));
+}
+
+#[test]
+fn strict_decoder_rejects_invalid_characters() {
+    // A11: a byte outside the alphabet, inside a full block (so that the
+    // kernels see it), is an error at its offset; 0.2.2 decoded garbage.
+    let (_, stream) = payload();
+    for (at, byte) in [(5, b'"'), (20, b'\''), (33, b' '), (40, 0xFF), (64, 0x00)] {
+        let mut s = stream.clone();
+        s[at] = byte;
+        assert_decodes(&s, Err(base91::Error::InvalidCharacter { offset: at }));
+    }
+}
+
+#[test]
+fn strict_decoder_rejects_invalid_lengths() {
+    // A12: L mod 16 in {1, 6, 11}; 0.2.2 decoded them silently.
+    for length in [1, 6, 11, 17, 38] {
+        let s = [&b"-"[..], &vec![b'#'; length]].concat();
+        assert_decodes(&s, Err(base91::Error::InvalidLength));
+    }
+}
+
+#[test]
+fn strict_decoder_rejects_irregular_layouts() {
+    // A13: 0.2.2 stripped every LF anywhere, or decoded garbage.
+    let (_, stream) = payload();
+    // A terminator inside an unwrapped payload.
+    let s = [&stream[..10], b"\n", &stream[10..]].concat();
+    assert_decodes(&s, Err(base91::Error::InvalidLayout { offset: 10 }));
+    // A second line growing past W = 32 (learned from the first line): the
+    // error is at its 33rd character, where a terminator was due.
+    let x = random(200);
+    let mut s = oracle::encode(&x, 32);
+    s.remove(2 + 33 + 32);
+    assert_decodes(
+        &s,
+        Err(base91::Error::InvalidLayout {
+            offset: 2 + 33 + 32,
+        }),
+    );
+    // Mixed terminators: LF, then CR LF.
+    let mut s = oracle::encode(&x, 32);
+    s.insert(2 + 33 + 32, b'\r');
+    assert_decodes(
+        &s,
+        Err(base91::Error::InvalidLayout {
+            offset: 2 + 33 + 32,
+        }),
+    );
+}
+
+#[test]
+fn strict_decoder_rejects_pairs_above_8191() {
+    // A13b: 0.2.2 let the 14th bit spill into the next group.
+    let (_, stream) = payload();
+    for at in [1, 17, 47] {
+        let mut s = stream.clone();
+        s[at] = b'~';
+        s[at + 1] = b'~';
+        assert_decodes(&s, Err(base91::Error::InvalidValue { offset: at }));
+    }
+}

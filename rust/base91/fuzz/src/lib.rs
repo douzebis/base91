@@ -20,11 +20,10 @@
 
 use base91::simd::{self, SimdLevel};
 use base91_testkit::canary::Guarded;
-use base91_testkit::oracle::{self, Classification};
+use base91_testkit::oracle::{self, Classification, DecodeError};
 use base91_testkit::pending::{is_pending, Deviation};
 use base91_testkit::reader::PieceReader;
 use std::io::Read;
-use std::panic::{self, AssertUnwindSafe};
 
 /// Decoded parameters of a fuzz input.
 struct Params {
@@ -54,14 +53,25 @@ fn chunk_lengths(len: usize, chunk: usize) -> Vec<usize> {
     lengths
 }
 
-fn simd_decode_in_chunks(stream: &[u8], p: &Params) -> Vec<u8> {
+fn simd_decode_in_chunks(stream: &[u8], p: &Params) -> Result<Vec<u8>, base91::Error> {
     let mut decoder = simd::Decoder::new(p.level);
     let mut out = Vec::new();
     for piece in stream.chunks(p.chunk) {
-        decoder.decode(piece, &mut out).unwrap();
+        decoder.decode(piece, &mut out)?;
     }
-    decoder.finish(&mut out).unwrap();
-    out
+    decoder.finish(&mut out)?;
+    Ok(out)
+}
+
+/// The oracle's result for a SIMD (or empty) stream, as the library
+/// reports it.
+fn expected(stream: &[u8]) -> Result<Vec<u8>, base91::Error> {
+    oracle::decode(stream).map_err(|e| match e {
+        DecodeError::InvalidCharacter { offset } => base91::Error::InvalidCharacter { offset },
+        DecodeError::InvalidLayout { offset } => base91::Error::InvalidLayout { offset },
+        DecodeError::InvalidLength => base91::Error::InvalidLength,
+        DecodeError::InvalidValue { offset } => base91::Error::InvalidValue { offset },
+    })
 }
 
 fn read_all(reader: impl Read) -> Vec<u8> {
@@ -92,35 +102,14 @@ pub fn check_decode(data: &[u8]) {
 }
 
 fn check_simd_decode(stream: &[u8], p: &Params) {
-    let strict = !is_pending(Deviation::SimdStrictDecoding);
-    let run = || {
-        let got = simd::decode(stream, p.level);
-        let mut decoder = simd::Decoder::new(p.level);
-        let mut single = Vec::new();
-        let _ = decoder.decode(stream, &mut single);
-        let _ = decoder.finish(&mut single);
-        got
-    };
-    // With overflow checks on, the pending strict decoder panics on invalid
-    // characters (spec 0008 annex A11). Under `cargo test` that panic is
-    // caught; fuzz builds turn overflow checks off instead, since libFuzzer
-    // aborts on any panic.
-    let got = if strict {
-        run()
-    } else {
-        match panic::catch_unwind(AssertUnwindSafe(run)) {
-            Ok(got) => got,
-            Err(_) => return,
-        }
-    };
-    if strict {
-        if let Ok(expected) = oracle::decode(stream) {
-            assert_eq!(got.as_deref(), Ok(&expected[..]));
-            if !is_pending(Deviation::SimdStreamingDecoder) {
-                assert_eq!(simd_decode_in_chunks(stream, p), expected);
-            }
-        }
-    }
+    // Strict decoding (spec 0008 §3.5): the oracle's bytes, or its error
+    // (class and offset), from every decoder and for any chunking.
+    let want = expected(stream);
+    assert_eq!(simd::decode(stream, p.level), want);
+    let mut buf = vec![0u8; simd::decode_size_hint(stream.len())];
+    let got = simd::decode_slice(stream, p.level, &mut buf).map(|n| buf[..n].to_vec());
+    assert_eq!(got, want);
+    assert_eq!(simd_decode_in_chunks(stream, p), want);
 }
 
 /// Whether the auto-detecting decoders must treat `stream` as legacy (spec
@@ -179,17 +168,17 @@ pub fn check_roundtrip(data: &[u8]) {
     assert_eq!(simd::decode(&stream, p.level).as_deref(), Ok(x));
 
     if !x.is_empty() || !is_pending(Deviation::SimdStreamingEncoderEmpty) {
-        let unwrapped = oracle::encode(x, 0);
-        let mut encoder = simd::Encoder::new(p.level, 0).unwrap();
+        // Streaming, wrapping included (spec 0010 §2).
+        let mut encoder = simd::Encoder::new(p.level, p.width).unwrap();
         let mut got = Vec::new();
         for piece in x.chunks(p.chunk) {
             encoder.encode(piece, &mut got);
         }
         encoder.finish(&mut got);
-        assert_eq!(got, unwrapped);
+        assert_eq!(got, stream);
     }
     if !is_pending(Deviation::SimdStreamingDecoder) {
-        assert_eq!(simd_decode_in_chunks(&stream, &p), x);
+        assert_eq!(simd_decode_in_chunks(&stream, &p).as_deref(), Ok(x));
         if !is_pending(Deviation::IoReaderEarlyEof) {
             let lengths = chunk_lengths(stream.len(), p.chunk);
             assert_eq!(read_all(PieceReader::new(&stream, &lengths)), x);

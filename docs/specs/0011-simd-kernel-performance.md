@@ -21,8 +21,29 @@ investigate; it becomes a real spec once someone takes it up.
 
 ## Facts so far
 
-Dev machine, 2026-09-27, x86_64 with AVX2, 4 MiB of random data, unwrapped
-SIMD streams (`tests/perf_sanity.rs`; median of 7 runs, three runs):
+**Superseded (2026-09-28).** The table below was measured without CPU
+pinning on a hybrid laptop chip (Intel Core Ultra 7 165U) in a VM, so on
+performance and efficiency cores alike. Efficiency cores execute 256-bit
+AVX2 as two 128-bit halves, which is why AVX2 seemed to buy nothing. Re-
+measured on a performance core, with the 0.3.0 driver (spec 0010;
+`perf_sanity`, 512 KiB, fastest of 51 runs, three runs):
+
+| Level | encode (MB/s) | decode (MB/s) |
+|---|---|---|
+| Scalar | 3045–3106 | 2292–2328 |
+| Simd128 (SSE4.1) | 5123–5232 | 5795–5904 |
+| Simd256 (AVX2) | 9293–9880 | 7747–7763 |
+
+- **AVX2 vs SSE4.1:** ×1.81–1.89 on encode, ×1.31–1.34 on decode. AVX2
+  earns its keep (question 4 below).
+- **Spec 0002's targets** (encode ≥ 5 GB/s, decode ≥ 3.5 GB/s, AVX2) are
+  met at this cache-resident size (question 3 below); at sizes beyond the
+  L2 cache, memory bandwidth takes over.
+- On an efficiency core, AVX2 over SSE4.1 is about ×1.1 (decode).
+
+The original measurement, for the record (dev machine, 2026-09-27, 0.2.2,
+4 MiB of random data, unwrapped SIMD streams, `tests/perf_sanity.rs`
+median of 7 runs, three runs, **unpinned**):
 
 | Level | encode (MB/s) | decode (MB/s) |
 |---|---|---|
@@ -66,7 +87,9 @@ SIMD streams (`tests/perf_sanity.rs`; median of 7 runs, three runs):
 **Fact.** How fast a kernel loop runs depends heavily on the shape of the
 Rust code around it, because that shape steers the compiler's register
 allocation and inlining. Measured while writing the spec 0010 driver
-(1 MiB, one pinned vCPU, rustc from the pinned nixpkgs):
+(1 MiB, rustc from the pinned nixpkgs, on an **efficiency core**; the
+generated code does not depend on the core, but the size of the effect
+does, and should be re-measured on a performance core):
 
 | Loop around the block kernel | SSE4.1 decode | AVX2 decode |
 |---|---|---|
@@ -131,12 +154,28 @@ certainty at a real maintenance cost; so far the sensitivity has been
 seen on loops that option 1 restructures anyway. Once option 1 is done,
 the per-kernel special cases above should go.
 
+**Option 3, as implemented (spec 0010, stage 3).** `perf_sanity` guards
+the three ratios above, calibrated on a performance core at 70 % of the
+lowest of three runs (the AVX2 / SSE4.1 thresholds capped at 0.90, for
+machines with half-width AVX2). Its first calibration, on an efficiency
+core with 4 MiB inputs and the median of 7 runs, was too noisy to guard
+anything finer than "twice as slow" (AVX2 over SSE4.1 decode ranged from
+0.89 to 1.23). Measuring on a performance core, at a cache-resident size
+(512 KiB), with the fastest of 51 runs and no allocation in the timed
+region, brought the run-to-run spread of every ratio down to a few
+hundredths; the thresholds then catch a regression that moves a ratio by
+about a third. Tighter margins would need the same conditions on every
+machine that runs the guard, which CI runners do not offer.
+
 **Targets left over from spec 0010** (both kernel-loop work):
-- Wrapped decoding within 10 % of unwrapped: stage 1 measures +12 %
-  (274 µs against 245 µs, AVX2, W = 64).
+- Wrapped within 10 % of unwrapped: on a performance core, +14 % on
+  decode (168–170 µs against 147–149 µs, AVX2, W = 64, 1 MiB) and +16 % on
+  encode (138–140 µs against 119–120 µs); on an efficiency core, +12 % and
+  +8 %.
 - Strict validation costing at most 3 % of decode throughput (spec 0008
-  §3.5): stage 1 measures +25 % (SSE4.1) and +29 % (AVX2), every part of
-  the check costing several percent (spec 0010, decision 7). Candidate
+  §3.5): on a performance core, +22 % (SSE4.1), +16.5 % (AVX2) and
+  +29.5 % (AVX2, W = 64); on an efficiency core, +25 % and +29 %, every
+  part of the check costing several percent (spec 0010, decision 7). Candidate
   formulations, to evaluate with the kernels reshaped (option 1 above):
   running maxima instead of subtract-and-OR (one operation per block for
   the range check and for the 8191 check, tested once per batch); the 8191

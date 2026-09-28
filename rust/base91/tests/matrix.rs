@@ -203,18 +203,21 @@ fn simd_streaming_encoder_matches_oracle() {
         Deviation::SimdStreamingEncoderEmpty,
     );
     for (name, x) in inputs("simd_streaming_encoder") {
-        let expected = oracle::encode(&x, 0);
         for (plan, lengths) in chunkings(&mut rng, x.len()) {
-            for level in LEVELS {
-                let mut encoder = simd::Encoder::new(level, 0).unwrap();
-                let mut got = Vec::new();
-                for piece in pieces(&x, &lengths) {
-                    encoder.encode(piece, &mut got);
+            for width in WIDTHS {
+                let expected = oracle::encode(&x, width);
+                for level in LEVELS {
+                    let mut encoder = simd::Encoder::new(level, width).unwrap();
+                    let mut got = Vec::new();
+                    for piece in pieces(&x, &lengths) {
+                        encoder.encode(piece, &mut got);
+                    }
+                    encoder.finish(&mut got);
+                    assert!(got == expected, "{name}, {plan}, W={width}, {level:?}");
                 }
-                encoder.finish(&mut got);
-                assert!(got == expected, "{name}, {plan}, {level:?}");
             }
         }
+        let expected = oracle::encode(&x, 0);
         // Empty calls interleaved: they must not change the output. With an
         // empty input this is bug 4 (spec 0006).
         if x.is_empty() && skipped.skip() {
@@ -227,6 +230,99 @@ fn simd_streaming_encoder_matches_oracle() {
         encoder.encode(b"", &mut got);
         encoder.finish(&mut got);
         assert!(got == expected, "{name}, with empty calls");
+    }
+}
+
+/// The slice API (spec 0010 §2): into canary-guarded buffers of exactly the
+/// required size, one-shot and streaming. Each streaming call is first given
+/// a buffer one byte too small: it must fail with the exact size, write
+/// nothing and keep its state (the final output proves it).
+#[test]
+fn simd_slice_api_matches_oracle() {
+    let mut rng = Rng::for_test("simd_slice_api");
+    for (name, x) in inputs("simd_slice_api") {
+        for width in WIDTHS {
+            let expected = oracle::encode(&x, width);
+            for level in LEVELS {
+                let what = format!("{name}, W={width}, {level:?}");
+                let needed = simd::encoded_len(x.len(), width).unwrap();
+                assert_eq!(needed, expected.len(), "{what}");
+                let mut out = Guarded::new(needed);
+                // SAFETY: `out` holds `needed` initialized bytes.
+                let buf = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr(), needed) };
+                let n = simd::encode_slice(&x, level, width, buf).unwrap();
+                out.check();
+                assert!(out.written(n) == expected, "{what}: encode_slice");
+
+                let hint = simd::decode_size_hint(expected.len());
+                let mut back = Guarded::new(hint);
+                // SAFETY: as above.
+                let buf = unsafe { std::slice::from_raw_parts_mut(back.as_mut_ptr(), hint) };
+                let n = simd::decode_slice(&expected, level, buf).unwrap();
+                back.check();
+                assert!(back.written(n) == x, "{what}: decode_slice");
+            }
+
+            let lengths = rng.split_points(x.len());
+            let mut encoder = simd::Encoder::new(SimdLevel::default(), width).unwrap();
+            let mut got = Vec::new();
+            let mut encode_piece = |got: &mut Vec<u8>, piece: Option<&[u8]>| {
+                let call = |enc: &mut simd::Encoder, buf: &mut [u8]| match piece {
+                    Some(p) => enc.encode_slice(p, buf),
+                    None => enc.finish_slice(buf),
+                };
+                let mut probe = [0u8; 0];
+                let needed = match call(&mut encoder, &mut probe) {
+                    Ok(0) => return,
+                    Err(base91::Error::BufferTooSmall { needed }) => needed,
+                    other => panic!("{name}, W={width}: {other:?}"),
+                };
+                let mut small = vec![0xA5u8; needed - 1];
+                assert_eq!(
+                    call(&mut encoder, &mut small),
+                    Err(base91::Error::BufferTooSmall { needed })
+                );
+                assert!(small.iter().all(|&b| b == 0xA5));
+                let mut buf = vec![0u8; needed];
+                assert_eq!(call(&mut encoder, &mut buf), Ok(needed));
+                got.extend_from_slice(&buf);
+            };
+            for piece in pieces(&x, &lengths) {
+                encode_piece(&mut got, Some(piece));
+            }
+            encode_piece(&mut got, None);
+            assert!(got == expected, "{name}, W={width}: streaming encode_slice");
+
+            let lengths = rng.split_points(expected.len());
+            let mut decoder = simd::Decoder::new(SimdLevel::default());
+            let mut back = Vec::new();
+            for piece in pieces(&expected, &lengths) {
+                // A call needing no room succeeds on the empty probe, and
+                // has then consumed its piece.
+                let needed = match decoder.decode_slice(piece, &mut []) {
+                    Ok(n) => {
+                        assert_eq!(n, 0);
+                        continue;
+                    }
+                    Err(base91::Error::BufferTooSmall { needed }) => needed,
+                    Err(e) => panic!("{name}, W={width}: {e:?}"),
+                };
+                assert!(needed <= simd::decode_size_hint(piece.len() + 15));
+                let mut small = vec![0xA5u8; needed - 1];
+                assert_eq!(
+                    decoder.decode_slice(piece, &mut small),
+                    Err(base91::Error::BufferTooSmall { needed })
+                );
+                assert!(small.iter().all(|&b| b == 0xA5));
+                let mut buf = vec![0u8; needed];
+                let n = decoder.decode_slice(piece, &mut buf).unwrap();
+                back.extend_from_slice(&buf[..n]);
+            }
+            let mut buf = [0u8; 12];
+            let n = decoder.finish_slice(&mut buf).unwrap();
+            back.extend_from_slice(&buf[..n]);
+            assert!(back == x, "{name}, W={width}: streaming decode_slice");
+        }
     }
 }
 
@@ -444,6 +540,30 @@ mod legacy {
             let mut back = Guarded::new(base91::decode_size_hint(expected.len()));
             // SAFETY: as above.
             let n = unsafe { base91::decode_unchecked(&expected, back.as_mut_ptr()) };
+            back.check();
+            assert!(back.written(n) == x, "{name}");
+        }
+    }
+
+    /// The legacy slice API (spec 0010 §2), into canary-guarded buffers of
+    /// exactly the size hints.
+    #[test]
+    fn slice_api_matches_reference() {
+        for (name, x) in inputs("legacy_slice_api") {
+            let expected = reference::encode(&x);
+            let hint = base91::encode_size_hint(x.len());
+            let mut out = Guarded::new(hint);
+            // SAFETY: `out` holds `hint` initialized bytes.
+            let buf = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr(), hint) };
+            let n = base91::encode_slice(&x, buf).unwrap();
+            out.check();
+            assert!(out.written(n) == expected, "{name}");
+
+            let hint = base91::decode_size_hint(expected.len());
+            let mut back = Guarded::new(hint);
+            // SAFETY: as above.
+            let buf = unsafe { std::slice::from_raw_parts_mut(back.as_mut_ptr(), hint) };
+            let n = base91::decode_slice(&expected, buf).unwrap();
             back.check();
             assert!(back.written(n) == x, "{name}");
         }

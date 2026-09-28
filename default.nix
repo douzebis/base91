@@ -144,17 +144,12 @@ let
   # pinned stable rustc (-s none: no sanitizer, none is available), each
   # target for fuzzSeconds, starting from the committed corpus. A crash
   # fails the build; libFuzzer's log and any crash inputs are kept in $out.
-  # Not part of the blocking CI (manual or scheduled).
-  #
-  # Overflow checks are off while spec 0008's strict decoder is pending:
-  # the scalar SIMD decoder overflows on invalid characters (annex A11),
-  # and libFuzzer aborts on any panic. Debug assertions, which catch
-  # out-of-bounds writes, stay on.
+  # Not part of the blocking CI (manual or scheduled). cargo-fuzz builds
+  # with debug assertions and overflow checks on.
   rustFuzz = crane.mkCargoDerivation (rustCommon // {
     pname             = "base91-fuzz";
     cargoArtifacts    = null;
     nativeBuildInputs = rustCommon.nativeBuildInputs ++ [ pkgs.cargo-fuzz ];
-    RUSTFLAGS         = "-Coverflow-checks=off";
     buildPhaseCargoCommand = ''
       cd base91
       status=0

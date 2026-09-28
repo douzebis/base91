@@ -147,6 +147,16 @@ fn simd_mode_rejects_invalid_widths() {
     }
 }
 
+#[test]
+fn decode_reports_invalid_simd_streams() {
+    // Strict decoding (spec 0010 §6): exit status 1, the error and its
+    // offset on stderr.
+    let output = run(&ours(), &["-d"], b"-##\"##");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid character at offset 3"), "{stderr}");
+}
+
 // ---------------------------------------------------------------------------
 // Legacy mode, against upstream's CLI
 // ---------------------------------------------------------------------------

@@ -21,7 +21,6 @@ const TARGETS: [(&str, Check); 4] = [
 
 #[test]
 fn corpus_replays_cleanly() {
-    base91_testkit::pending::quiet_expected_panics();
     let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
     let mut failed = Vec::new();
     for (target, check) in TARGETS {

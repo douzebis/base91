@@ -350,3 +350,70 @@ mod tests {
         }
     }
 }
+
+/// The slice API without an allocator (spec 0010 §2): these tests use stack
+/// buffers only, and also run in the `no_std` builds without `alloc`.
+#[cfg(test)]
+mod slice_tests {
+    use crate::simd::{self, SimdLevel};
+
+    const INPUT: &[u8] = b"The quick brown fox jumps over the lazy dog, twice: \
+                           the quick brown fox jumps over the lazy dog.";
+
+    #[test]
+    fn legacy_round_trip() {
+        let mut enc = [0u8; 256];
+        let n = crate::encode_slice(INPUT, &mut enc).unwrap();
+        let mut dec = [0u8; 256];
+        let m = crate::decode_slice(&enc[..n], &mut dec).unwrap();
+        assert_eq!(&dec[..m], INPUT);
+    }
+
+    #[test]
+    fn simd_round_trip() {
+        for level in [SimdLevel::Scalar, SimdLevel::Simd128, SimdLevel::Simd256] {
+            for wrap in [0, 32] {
+                let mut enc = [0u8; 256];
+                let n = simd::encode_slice(INPUT, level, wrap, &mut enc).unwrap();
+                assert_eq!(Ok(n), simd::encoded_len(INPUT.len(), wrap));
+                let mut dec = [0u8; 256];
+                let m = simd::decode_slice(&enc[..n], level, &mut dec).unwrap();
+                assert_eq!(&dec[..m], INPUT);
+            }
+        }
+    }
+
+    #[test]
+    fn simd_streaming_round_trip() {
+        let mut enc = [0u8; 256];
+        let mut n = 0;
+        let mut encoder = simd::Encoder::new(SimdLevel::default(), 32).unwrap();
+        for piece in INPUT.chunks(7) {
+            n += encoder.encode_slice(piece, &mut enc[n..]).unwrap();
+        }
+        n += encoder.finish_slice(&mut enc[n..]).unwrap();
+        assert_eq!(Ok(n), simd::encoded_len(INPUT.len(), 32));
+
+        let mut dec = [0u8; 256];
+        let mut m = 0;
+        let mut decoder = simd::Decoder::new(SimdLevel::default());
+        for piece in enc[..n].chunks(5) {
+            m += decoder.decode_slice(piece, &mut dec[m..]).unwrap();
+        }
+        m += decoder.finish_slice(&mut dec[m..]).unwrap();
+        assert_eq!(&dec[..m], INPUT);
+    }
+
+    #[test]
+    fn simd_errors_without_alloc() {
+        let mut dec = [0u8; 16];
+        assert_eq!(
+            simd::decode_slice(b"-##\"##", SimdLevel::default(), &mut dec),
+            Err(crate::Error::InvalidCharacter { offset: 3 })
+        );
+        assert_eq!(
+            simd::decode_slice(b"-#", SimdLevel::default(), &mut dec),
+            Err(crate::Error::InvalidLength)
+        );
+    }
+}

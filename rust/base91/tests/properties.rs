@@ -11,7 +11,7 @@
 //! shrunk input instead.
 
 use base91::simd::{self, SimdLevel};
-use base91_testkit::oracle;
+use base91_testkit::oracle::{self, DecodeError};
 use base91_testkit::pending::{is_pending, Deviation};
 use base91_testkit::rng::{full_matrix, seed};
 use proptest::collection::vec;
@@ -55,6 +55,29 @@ fn bytes_and_cuts(max: usize) -> impl Strategy<Value = (Vec<u8>, Vec<usize>)> {
 
 /// `data` split at the (unsorted, possibly repeated) `cuts`; empty pieces
 /// are kept on purpose.
+/// Streams that look like SIMD streams: `-`, then mostly alphabet
+/// characters, with terminators, spaces and arbitrary bytes mixed in.
+fn simd_like() -> impl Strategy<Value = Vec<u8>> {
+    let byte = prop_oneof![
+        40 => proptest::sample::select(&oracle::ALPHABET[..]),
+        2 => Just(b'\n'),
+        1 => Just(b'\r'),
+        1 => Just(b' '),
+        1 => any::<u8>(),
+    ];
+    vec(byte, 0..400).prop_map(|body| [&b"-"[..], &body].concat())
+}
+
+/// The oracle's result, as the library reports it.
+fn expected(stream: &[u8]) -> Result<Vec<u8>, base91::Error> {
+    oracle::decode(stream).map_err(|e| match e {
+        DecodeError::InvalidCharacter { offset } => base91::Error::InvalidCharacter { offset },
+        DecodeError::InvalidLayout { offset } => base91::Error::InvalidLayout { offset },
+        DecodeError::InvalidLength => base91::Error::InvalidLength,
+        DecodeError::InvalidValue { offset } => base91::Error::InvalidValue { offset },
+    })
+}
+
 fn split<'a>(data: &'a [u8], cuts: &[usize]) -> Vec<&'a [u8]> {
     let mut cuts = cuts.to_vec();
     cuts.sort_unstable();
@@ -163,17 +186,55 @@ proptest! {
         }
     }
 
-    /// Any byte string: SIMD decoders agree with the oracle (strict
-    /// decoder, spec 0008 annex A9–A13b).
+    /// SIMD-like streams, valid or not: the decoders give the oracle's
+    /// result, bytes or error (class and offset), one-shot and with any
+    /// split (strict decoding, spec 0008 §3.5, annex A9–A13b).
     #[test]
-    fn simd_decode_arbitrary_matches_oracle(s in vec(any::<u8>(), 0..300)) {
-        if !is_pending(Deviation::SimdStrictDecoding)
-            && oracle::classify(&s) != oracle::Classification::Legacy
-        {
-            if let Ok(expected) = oracle::decode(&s) {
-                prop_assert_eq!(simd::decode(&s, SimdLevel::default()), Ok(expected));
-            }
+    fn simd_decode_arbitrary_matches_oracle((s, cuts) in simd_like().prop_flat_map(|s| {
+        let n = s.len();
+        (Just(s), vec(0..=n, 0..8))
+    }), level in level()) {
+        let want = expected(&s);
+        prop_assert_eq!(simd::decode(&s, level), want.clone());
+        let mut decoder = simd::Decoder::new(level);
+        let mut got = Vec::new();
+        let result = split(&s, &cuts)
+            .into_iter()
+            .try_for_each(|piece| decoder.decode(piece, &mut got))
+            .and_then(|()| decoder.finish(&mut got))
+            .map(|()| got);
+        prop_assert_eq!(result, want);
+    }
+
+    /// Wrapped streaming encoding with any split equals the oracle.
+    #[test]
+    fn simd_wrapped_streaming_encode_any_split(
+        (x, cuts) in bytes_and_cuts(1000),
+        level in level(),
+        width in width(),
+    ) {
+        let mut encoder = simd::Encoder::new(level, width).unwrap();
+        let mut got = Vec::new();
+        for piece in split(&x, &cuts) {
+            encoder.encode(piece, &mut got);
         }
+        encoder.finish(&mut got);
+        prop_assert_eq!(got, oracle::encode(&x, width));
+    }
+
+    /// The slice API writes what the Vec API returns, and the exact sizes
+    /// it requires are the ones it writes.
+    #[test]
+    fn slice_api_matches_vec_api(x in vec(any::<u8>(), 0..2000), level in level(), width in width()) {
+        let encoded = simd::encode(&x, level, width).unwrap();
+        prop_assert_eq!(simd::encoded_len(x.len(), width), Ok(encoded.len()));
+        let mut buf = vec![0u8; encoded.len()];
+        prop_assert_eq!(simd::encode_slice(&x, level, width, &mut buf), Ok(encoded.len()));
+        prop_assert_eq!(&buf, &encoded);
+
+        let mut back = vec![0u8; simd::decode_size_hint(encoded.len())];
+        let n = simd::decode_slice(&encoded, level, &mut back).unwrap();
+        prop_assert_eq!(&back[..n], &x[..]);
     }
 }
 

@@ -109,9 +109,9 @@ kernels. This spec replaces that loop.
    patch that disables the checks (reverted, result recorded here), not
    with a permanent feature.
 
-   *Measured (2026-09-28, stage 1, 1 MiB, one pinned vCPU, two
-   alternating rounds):* the checks cost far more than 3 %, and every part
-   of them costs several percent:
+   *Measured (2026-09-28, stage 1, 1 MiB, two alternating rounds, on an
+   efficiency core):* the checks cost far more than 3 %, and every part of
+   them costs several percent:
 
    | Checks | SSE4.1 decode | AVX2 decode |
    |---|---|---|
@@ -121,7 +121,12 @@ kernels. This spec replaces that loop.
    | + pairs above 8191 (all checks) | 278 µs (+25 %) | 251 µs (+29 %) |
 
    Wrapped (W = 64, AVX2): 276 µs with the checks, 198 µs without
-   (+39 %). The cost is out of proportion to the handful of vector
+   (+39 %).
+
+   *Re-measured on a performance core (2026-09-28, three alternating
+   rounds, spread under 2 %):* SSE4.1 196–204 µs with the checks against
+   164–165 µs without (+22 %); AVX2 150–151 against 128–130 µs (+16.5 %);
+   AVX2 wrapped (W = 64) 170–172 against 131–133 µs (+29.5 %). The cost is out of proportion to the handful of vector
    operations involved, which points to the code-generation sensitivity
    recorded in spec 0011. *Decided:* stage 1 ships with the checks as they
    are (still faster than 0.2.3 everywhere, see *Stage 1 results*); the
@@ -298,8 +303,8 @@ its `contains(&b'\n')` scan (a temporary patch, reverted), same pinned
 CPU. The rewrite removes that scan (§3); the measurement says how much of
 the unwrapped speedup to expect from it.
 
-*Measured (2026-09-27, 0.2.3, 1 MiB input, one pinned vCPU, two
-alternating rounds):*
+*Measured (2026-09-27, 0.2.3, 1 MiB input, two alternating rounds, on an
+efficiency core of the dev machine; see "Measurement conditions" below):*
 
 | Level | With the scan | Without | Speedup |
 |---|---|---|---|
@@ -395,9 +400,34 @@ spec 0011.
 - Version 0.3.0 for `base91-rs`, `base91-cli` and `pybase91` (the latter
   unchanged in behavior).
 
+## Measurement conditions
+
+The dev machine is a VM on an Intel Core Ultra 7 165U (hybrid: performance
+and efficiency cores), with a fixed vCPU-to-core mapping. Until
+2026-09-28, measurements ran on vCPU 2, an **efficiency core**, whose AVX2
+units are half-width and whose L2 is shared by four cores; from then on,
+on vCPU 8, a **performance core** (`taskset -c 8`, its sibling hyperthread
+idle). Numbers below say which. The efficiency-core numbers are valid as
+A/B comparisons on that core; the performance-core ones are the reference.
+
 ## Stage 1 results (2026-09-28)
 
-Against 0.2.3, 1 MiB, one pinned vCPU, with the strict checks:
+**Performance core** (the reference): 0.2.3 against the stage 3 tree,
+1 MiB, three alternating rounds (lowest–highest), with the strict checks:
+
+| | 0.2.3 | 0.3.0 |
+|---|---|---|
+| decode, unwrapped: scalar / SSE4.1 / AVX2 | 558–564 / 219–221 / 172–174 µs | 489–492 / 201 / 147–149 µs |
+| decode, W = 64 (AVX2) | 907–921 µs | 168–170 µs (+14 % over unwrapped) |
+| encode, unwrapped: scalar / SSE4.1 / AVX2 | 602–620 / 215–241 / 121–152 µs | 367–372 / 215–218 / 119–120 µs |
+| encode, W = 64 (AVX2) | 155–158 µs | 138–140 µs (+16 % over unwrapped) |
+| streaming decode, unwrapped / W = 64 | 173–177 / 722–738 µs | 164–165 / 196–197 µs |
+| legacy encode / decode (`Vec` API) | 1065–1100 / 1244–1269 µs | 1057–1066 / 1223–1242 µs |
+
+Everything is at least as fast as in 0.2.3, strict checks included.
+
+**Efficiency core** (the first measurement, kept for the record):
+against 0.2.3, 1 MiB, with the strict checks:
 
 | | 0.2.3 | Stage 1 |
 |---|---|---|
@@ -407,10 +437,12 @@ Against 0.2.3, 1 MiB, one pinned vCPU, with the strict checks:
 | encode, W = 64 (AVX2) | 482 µs | 357 µs (+8 % over unwrapped) |
 | streaming decode, unwrapped / W = 64 | 302 / 869 µs | 264 / ≈ 340 µs |
 
-- Unwrapped encode is within 2 % of 0.2.3 (SSE4.1 +1.2 %, AVX2 +1.5 %).
-- Wrapped decode misses the 10 % target by 2 points; the gap is
-  kernel-loop work and moves to spec 0011, with the validation budget
-  (decision 7).
+- On the efficiency core, unwrapped encode was within 2 % of 0.2.3
+  (SSE4.1 +1.2 %, AVX2 +1.5 %); on the performance core it is faster.
+- Wrapping costs more than the 10 % target: +14 % (decode) and +16 %
+  (encode) on the performance core, +12 % and +8 % on the efficiency
+  core. The gap is kernel-loop work and moves to spec 0011, with the
+  validation budget (decision 7).
 - The loop around each kernel is chosen per kernel by measurement (a flat
   loop for AVX2, one out-of-line call per line for SSE4.1): see spec 0011,
   *Code-generation sensitivity*.
@@ -426,6 +458,23 @@ Two changes to the plan below:
   classes and offsets are the ones the oracle computes" (§1) would have
   made the oracle's check order normative, and that order cannot be
   implemented by a streaming decoder.
+
+## Stage 3 results (2026-09-28)
+
+- `pending::PENDING` is empty. Every decoder (one-shot, slice,
+  streaming in any chunking, `io`) gives the oracle's result, bytes or
+  exact error, on the mutated streams (8 376 per run: 5 336 accepted,
+  3 040 rejected), on SIMD-like arbitrary streams (proptest), and in the
+  fuzz targets, which now run with overflow checks on.
+- `strict_decoder_*` regression tests, one per annex item A9–A13b.
+- The matrix covers the slice API (canary-guarded, exact sizes,
+  `BufferTooSmall` leaving output and state untouched) and wrapped
+  streaming encoding; the CLI test covers the error exit.
+- `perf_sanity` re-calibrated on the performance core, with a steadier
+  method (512 KiB, fastest of 51 runs, no allocation in the timed
+  region): its ratios now vary by a few hundredths between runs. Wrapped
+  over unwrapped: 0.59 / 0.58 (was 0.24 / 0.11); see spec 0011.
+- Line coverage 96.8 % (94.4 % before the rewrite).
 
 ## Stages
 
