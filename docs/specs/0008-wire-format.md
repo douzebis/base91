@@ -275,13 +275,19 @@ arbitrary whitespace would force a slow path that compacts data, for
 input that no conforming encoder produces.
 
 **Cost of error detection.** Silent wrong output is not an acceptable
-price for speed, and it doesn't need to be paid. On valid input,
-detection SHOULD cost at most 3 % of decode throughput compared with the
-same decoder without checks. Implementations should get there as follows:
+price for speed. On valid input, detection SHOULD cost at most 30 % of
+decode throughput compared with the same decoder without checks. (The
+reference kernels measure +17 to +22 % on a performance core and +20 to
++27 % on an efficiency core. The first version of this section asked for
+3 %, which exact checks cannot reach with this alphabet: they take four
+vector operations per 16 characters, against about eleven for decoding
+itself; see spec 0011, stage 3.) Implementations should get there as
+follows:
 
-- **Characters:** the SIMD kernels already range-check every character.
-  OR the per-block results into an accumulator, and test it once per
-  call rather than once per block.
+- **Characters:** the SIMD kernels already compute every character's
+  index. Keep running maximums of the indices (with `'` forced out of
+  range) and of the pair values, and compare them once per batch rather
+  than once per block.
 - **Layout:** one byte comparison per line.
 - **Length:** a single check at the end.
 - **Error position:** reporting the exact offset is optional. A decoder

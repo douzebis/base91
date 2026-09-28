@@ -47,7 +47,7 @@ Every goal applies on both core types: performance and efficiency cores
 - **G1 — Validation cost:** at most 3 % of decode throughput (spec 0008
   §3.5), SSE4.1 and AVX2, unwrapped and wrapped. If
   the best formulation cannot reach it, the lowest cost reached, with the
-  evidence (open question 1).
+  evidence (open question 1). *Relaxed by decision 4: at most 30 %.*
 - **G2 — Wrapping overhead:** wrapped (W = 64) within 10 % of unwrapped,
   encode and decode, SSE4.1 and AVX2.
 - **G3 — Robust code generation:** one loop structure for the three SIMD
@@ -233,7 +233,8 @@ against the current one and the unchecked build:
 
 The cheapest formulation that keeps every kernel validation test passing
 (spec 0010 §7) is kept, per kernel if they differ. G1 is checked with the
-protocol of §1; if no formulation reaches 3 %, open question 1 decides.
+protocol of §1; if no formulation reaches 3 %, open question 1 decides
+(decided: decision 4).
 
 ### 5 — Wrapping overhead
 
@@ -297,12 +298,17 @@ One commit per stage, each with every check passing.
    with the other three idle (§1); the stages are reordered after the
    baseline: wrapping fixes and validation before the reshaping.
 
+4. **G1 relaxed to the measured cost** (open question 1, decided with
+   the stage 3 results): exact checks take four vector operations per
+   block with this alphabet, +17 to +27 % of the new kernels' decode
+   throughput. Spec 0008 §3.5's SHOULD becomes "at most 30 %" (the
+   highest measured cost, 27 %, rounded up for run-to-run noise). The gap
+   is not a trigger of the assembly gate (§6): assembly cannot remove the
+   four operations.
+
 ## Open questions
 
-1. **If 3 % is out of reach with intrinsics:** accept the lowest cost
-   reached and relax spec 0008 §3.5's SHOULD to it, with the evidence; or
-   make it a trigger of the assembly gate (§6)? *To be discussed with the
-   stage 3 results: it depends on the size of the gap.*
+None.
 
 ## Results
 
@@ -629,7 +635,8 @@ about 4–5 % per operation in these issue-bound kernels, 3 % (G1) is out of
 reach. One variant was measured and dropped: OR instead of the maximum for
 the pair values (exact: a valid value never has bits 13–15 set, and values
 stay below 23 461): no change on the efficiency core, −3.3 to +2.0 % on
-the performance core. Open question 1 is to be decided with these figures.
+the performance core. Open question 1 was decided with these figures
+(decision 4).
 
 ### Stage 3 — NEON (2026-09-28)
 
