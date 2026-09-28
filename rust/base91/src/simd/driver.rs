@@ -740,15 +740,18 @@ impl DecodeCore {
             // the next turn), up to a batch.
             let (n, lines, stride) = if known && self.line == 0 {
                 let (per_line, stride) = (self.width / 16, self.width + t.len());
-                let max_lines = (LINE_BATCH / per_line).max(1);
-                let mut lines = 0;
-                while lines < max_lines
-                    && i + stride * lines + self.width <= input.len()
-                    && (lines == 0 || term_at(i + stride * lines - t.len()))
-                {
-                    lines += 1;
-                }
-                (per_line, lines, stride)
+                // The lines wholly present, assuming the layout; their
+                // terminators are checked after the kernel call (below),
+                // when the batch is in the cache.
+                let present = match (input.len() - i).checked_sub(self.width) {
+                    Some(rest) => rest / stride + 1,
+                    None => 0,
+                };
+                (
+                    per_line,
+                    present.min((LINE_BATCH / per_line).max(1)),
+                    stride,
+                )
             } else {
                 let room = if known {
                     (self.width - self.line) / 16
@@ -765,7 +768,22 @@ impl DecodeCore {
             }
             let span = stride * (lines - 1) + 16 * n;
             let batch = &input[i..i + span];
-            if decode_blocks(self.level, batch, stride, out, *w, n, lines) {
+            let decoded = decode_blocks(self.level, batch, stride, out, *w, n, lines);
+            // The terminators between the batch's lines, one fixed-count,
+            // branch-free pass (the one after the last line is checked on the
+            // next turn).
+            let mut off = 0;
+            if lines > 1 {
+                let terms = &batch[16 * n..];
+                for (k, &want) in t.iter().enumerate() {
+                    off |= terms[k..]
+                        .iter()
+                        .step_by(stride)
+                        .take(lines - 1)
+                        .fold(0, |acc, &b| acc | (b ^ want));
+                }
+            }
+            if decoded && off == 0 {
                 if !known {
                     self.probe = (2 * self.probe).min(BATCH);
                 }

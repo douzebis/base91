@@ -175,16 +175,15 @@ unsafe fn encode_block_neon(input: *const u8, output: *mut u8) {
 
 /// Decode 16 SIMD-alphabet characters into 13 output bytes.
 ///
-/// Returns a mask that is nonzero if any input character is not in the SIMD
-/// alphabet, or any pair is worth more than 8191. The output is written
-/// either way.
+/// Returns what the batch validates (spec 0011 §4): the indices, `'` forced
+/// to 0xFF, and the pair values. The output is written either way.
 ///
 /// # Safety
 /// `input` must be readable for 16 bytes; `output` writable for 13.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 #[inline]
-unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> uint8x16_t {
+unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> (uint8x16_t, uint16x8_t) {
     let chars = vld1q_u8(input);
 
     // -----------------------------------------------------------------------
@@ -200,12 +199,11 @@ unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> uint8x16_t {
     let raw = vsubq_u8(chars, base);
     let indices8 = vaddq_u8(raw, needs_bump); // subtracts 1 where > 0x26
 
-    // Invalid characters (spec 0010 §5): every byte outside 0x23–0x7E gets
-    // an index above 90 (unsigned comparison). `'` (0x27) maps to the index
-    // of `&` and is rejected by comparison. Checked with the values, below.
-    let over = vcgtq_u8(indices8, vdupq_n_u8(90));
-    let apostrophe = vceqq_u8(chars, vdupq_n_u8(0x27));
-    let bad_chars = vorrq_u8(over, apostrophe);
+    // Validity (spec 0010 §5, spec 0011 §4): every byte outside 0x23–0x7E
+    // gets an index above 90; `'` (0x27) maps to the index of `&`, so it is
+    // forced to 0xFF. The batch keeps a running maximum of these and of the
+    // pair values, and compares them with 90 and 8191 once.
+    let checked = vorrq_u8(indices8, vceqq_u8(chars, vdupq_n_u8(0x27)));
 
     // -----------------------------------------------------------------------
     // Step 2: Deinterleave and reconstruct 13-bit values.
@@ -221,10 +219,6 @@ unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> uint8x16_t {
     let lo16 = vmovl_u8(vget_low_u8(lo8_sep));
     let hi16 = vmovl_u8(vget_low_u8(hi8_sep));
     let vals = vmlaq_u16(lo16, hi16, vdupq_n_u16(91));
-
-    // Pairs worth more than 8191 (spec 0008 invalid value) have a bit above
-    // bit 12.
-    let bad = vorrq_u8(bad_chars, vreinterpretq_u8_u16(vshrq_n_u16::<13>(vals)));
 
     // -----------------------------------------------------------------------
     // Step 3: Scatter 8 × 13-bit values back into 13 output bytes using
@@ -315,7 +309,7 @@ unsafe fn decode_block_neon(input: *const u8, output: *mut u8) -> uint8x16_t {
     let out128 = vorrq_u8(lo_out, hi_out);
     vst1q_u8(output, out128);
 
-    bad
+    (checked, vals)
 }
 
 // ---------------------------------------------------------------------------
@@ -364,12 +358,14 @@ pub(crate) unsafe fn decode_lines_neon(
     n: usize,
     lines: usize,
 ) -> bool {
-    let mut bad = vdupq_n_u8(0);
+    let (mut max_index, mut max_value) = (vdupq_n_u8(0), vdupq_n_u16(0));
     for l in 0..lines {
         let (src, dst) = (input.add(stride * l), output.add(13 * n * l));
         for i in 0..n {
-            bad = vorrq_u8(bad, decode_block_neon(src.add(16 * i), dst.add(13 * i)));
+            let (checked, vals) = decode_block_neon(src.add(16 * i), dst.add(13 * i));
+            max_index = vmaxq_u8(max_index, checked);
+            max_value = vmaxq_u16(max_value, vals);
         }
     }
-    vmaxvq_u8(bad) == 0
+    vmaxvq_u8(max_index) <= 90 && vmaxvq_u16(max_value) <= 8191
 }

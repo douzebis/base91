@@ -429,6 +429,52 @@ AVX2 encoding is down to about 5 % (from 14.6 %), the rest is inside the
 kernel loop (two AVX2 units per 64-character line), which is stage 4's
 subject; the decode overhead is linked to validation (stage 3).
 
+### Stage 3 — Validation and decode kernels, first part (2026-09-28)
+
+Quick harness (§1), five alternating rounds, fastest round; each change
+measured on its own against the tree before it, on both core types.
+(Absolute times drift between runs, by up to 15 % when the host is busy;
+only comparisons within a run count. The A/B script checks a reference
+first and refuses to run when the machine is slowed down.)
+
+| # | Change | SSE4.1 decode | AVX2 decode |
+|---|---|---|---|
+| 1 | Running maximums of the indices (`'` forced to 0xFF) and of the pair values, compared once per batch, instead of subtract-and-OR per block | validation cost 23 → 17 % (P), 25 → 14 % (E), unwrapped | 14 → 11 % (P), 26 → 22 % (E) |
+| 2 | `pmaddubsw` for the pair values (1 instruction instead of 6) | −19 to −25 % | — |
+| 3 | same, AVX2 | — | −13 to −18 % |
+| 4 | Packing with `pmaddwd` (value pairs into 26-bit fields), a per-lane shift (0, 2, 4, 6 bits; a multiply on SSE4.1) and two byte shuffles, instead of 7 shifts, 6 blends and 4 shuffles | −18 to −32 % | — |
+| 5 | same, AVX2 (`vpsllvd`) | — | −31 to −49 % |
+| 6 | SSE4.1: one validity test per batch, nested loop inlined (was: an out-of-line call and a test per line) | −1.5 to −16 % | — |
+| 7 | Terminators checked after the kernel call, branch-free, no counting loop before it | −2 to −5 % (W = 64) | −2 to −5 % (W = 64) |
+
+Tried and dropped: a flat loop for SSE4.1 with the new kernel (+7 to
++19 %); line batches of 64 blocks instead of 256 (+4 to +9 %).
+
+Change 5's size: the former AVX2 packing issued about 8 byte shuffles per
+32 characters, all on the one shuffle port of a performance core; the new
+loop issues 2–3, about 20 instructions per unit instead of about 40.
+
+Result against the stage 2 commit (`6f198ef`):
+
+| Decode | performance core | efficiency core |
+|---|---|---|
+| SSE4.1, unwrapped / W = 64 | 88.9 → 50.1 µs (−44 %) / 99.2 → 54.8 µs (−45 %) | 132.6 → 66.3 µs (−50 %) / 143.0 → 74.2 µs (−48 %) |
+| AVX2, unwrapped / W = 64 | 69.5 → 29.4 µs (−58 %) / 74.6 → 31.1 µs (−58 %) | 118.1 → 64.4 µs (−46 %) / 126.9 → 68.9 µs (−46 %) |
+
+Encoding and the scalar paths are unchanged (not touched yet).
+
+- G2 on decode: wrapping now costs +6 to +12 % (SSE4.1 on the efficiency
+  core still just over 10 %).
+- G1: validation still costs 8–34 % of the (much faster) decoder; its
+  absolute cost went down (AVX2, performance core: 4.7 µs per 512 KiB,
+  from 6.7 µs).
+
+Against 0.2.2 (`07ce3ea`, the published state), one-shot `Vec` API,
+512 KiB: SIMD decode with validation is 2.1–2.9 times faster unwrapped and
+9–14 times faster wrapped than 0.2.2 without it. The legacy codec
+regressed: encode +12 % (performance core), decode +37 % (efficiency core)
+— under investigation.
+
 ## Verification
 
 ```bash
