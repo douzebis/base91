@@ -58,7 +58,7 @@ buildPythonPackage (finalAttrs: {
   meta = {
     description = "Python bindings to base91-rs, a basE91 encoder and decoder";
     homepage = "https://github.com/douzebis/base91";
-    changelog = "https://github.com/douzebis/base91/blob/${finalAttrs.src.rev}/CHANGELOG.md";
+    changelog = "https://github.com/douzebis/base91/blob/${finalAttrs.src.tag}/CHANGELOG.md";
     license = lib.licenses.mit;
     maintainers = with lib.maintainers; [ douzebis ];
   };

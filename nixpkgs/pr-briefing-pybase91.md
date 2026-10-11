@@ -52,7 +52,7 @@ description's first paragraph, mark ready.
   `nix-build -A python3Packages.pybase91.tests.matches-cli`.  (Checked to
   fail when the two outputs differ.)
 - **`__structuredAttrs = true`**: as in `base91`.
-- **`meta.changelog`** uses `finalAttrs.src.rev`, as `base91` does
+- **`meta.changelog`** uses `finalAttrs.src.tag`, as `base91` does
   (`src` is `base91`'s).
 - **`meta`**: MIT (what the crate and `pyproject.toml` declare; the old
   revision said BSD-3-Clause and MIT, wrongly), `changelog` at the tag,

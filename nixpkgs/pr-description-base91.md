@@ -1,4 +1,4 @@
-base91: 0.1.0 -> 0.3.2, rewrite in Rust
+base91: 0.1.0 -> 0.3.2
 
 Update `base91` (the basE91 binary-to-text encoder) from the C tool to the
 Rust implementation that replaced it upstream.

@@ -59,7 +59,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
       the encoder and decoder under their traditional names.
     '';
     homepage = "https://github.com/douzebis/base91";
-    changelog = "https://github.com/douzebis/base91/blob/${finalAttrs.src.rev}/CHANGELOG.md";
+    changelog = "https://github.com/douzebis/base91/blob/${finalAttrs.src.tag}/CHANGELOG.md";
     license = lib.licenses.mit;
     maintainers = with lib.maintainers; [ douzebis ];
     mainProgram = "base91";

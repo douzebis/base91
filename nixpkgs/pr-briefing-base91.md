@@ -1,4 +1,4 @@
-# Briefing: nixpkgs PR `base91: 0.1.0 -> 0.3.2, rewrite in Rust`
+# Briefing: nixpkgs PR `base91: 0.1.0 -> 0.3.2`
 
 Preparation notes for the maintainer before marking NixOS/nixpkgs#504523
 ready, so that reviewer questions can be answered first-hand (nixpkgs
@@ -15,9 +15,10 @@ Line by line:
 
 - **`rustPlatform.buildRustPackage (finalAttrs: …)`**: the standard Rust
   builder; `finalAttrs` lets `src.tag` use the version, and
-  `meta.changelog` use the fetched tag (`finalAttrs.src.rev`, which
-  `fetchFromGitHub` sets to `refs/tags/v0.3.2`; GitHub resolves that
-  path), so the tag's spelling is written once.
+  `meta.changelog` reuse that tag (`finalAttrs.src.tag`, i.e. `v0.3.2`),
+  so the tag's spelling is written once.  (It used `src.rev`, which
+  `fetchFromGitHub` derives from `tag` as `refs/tags/v0.3.2`;
+  Sigmanificient suggested `src.tag`, the attribute the recipe sets.)
 - **`src = fetchFromGitHub { …; tag = "v${finalAttrs.version}"; hash }`**:
   `tag` instead of `rev` is the current nixpkgs convention for tags.  The
   hash was cross-checked with `nix-prefetch-url --unpack` on the tag's
@@ -75,8 +76,10 @@ Line by line:
   errors exit with 2 instead of 1 (clap's convention), the missing-file
   message does not name the file, different `--help`/`--version`/man page
   text.  That is why the release-notes box is unchecked.
-- **Why "rewrite in Rust" in the title?**  Same wording as yb
-  (#514826); it tells reviewers the derivation changed builder.
+- **The title.**  It said `…, rewrite in Rust` (yb's wording, #514826);
+  Sigmanificient asked for the plain `base91: 0.1.0 -> 0.3.2`, the
+  nixpkgs convention for updates.  The commit body and the description
+  still explain the change of builder.
 - **Who uses it?**  It is a command-line tool, already in nixpkgs, with no
   dependents.  The Rust crates are on crates.io (`base91-rs`,
   `base91-cli`), the Python binding on PyPI (`pybase91`).
