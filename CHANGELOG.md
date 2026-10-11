@@ -25,6 +25,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unpack. 19–32 % faster than 0.3.1 on both core types; with rustc 1.98,
   whose `_mm_packus_epi16` clamps before packing, 39–42 % (spec 0012 §4).
 
+### Fixed
+
+- `base91` ends silently when its reader closes the pipe (`base91 big |
+  head`), killed by SIGPIPE as the C tool and other Unix filters; it
+  printed `base91: Broken pipe (os error 32)` and exited with status 1.
+
 ### Changed
 
 - `base91 --man` prints the man page; it replaces `build.rs`, which wrote

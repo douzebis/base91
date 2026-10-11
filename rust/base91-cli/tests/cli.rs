@@ -435,3 +435,39 @@ fn simd_round_trip_sizes_0_to_32() {
         assert_eq!(decoded, input, "simd round-trip mismatch at len={len}");
     }
 }
+
+#[test]
+fn reader_closing_the_pipe_ends_base91_silently() {
+    use std::io::Read;
+    use std::os::unix::process::ExitStatusExt;
+
+    // Encoded, 4 MiB fill the stdout pipe many times over: base91 is still
+    // writing when the reader goes away, as under `base91 big | head`.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("big");
+    std::fs::write(&path, vec![0x5Au8; 4 << 20]).unwrap();
+    let mut child = Command::new(bin())
+        .arg(&path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn base91");
+    let mut first = [0u8; 16];
+    child.stdout.take().unwrap().read_exact(&mut first).unwrap();
+    // The read end is closed here.
+    let output = child.wait_with_output().unwrap();
+
+    // As the C tool and other Unix filters: killed by SIGPIPE, no message.
+    assert_eq!(
+        output.status.signal(),
+        Some(libc::SIGPIPE),
+        "{:?}",
+        output.status
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

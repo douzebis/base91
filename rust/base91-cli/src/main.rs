@@ -310,6 +310,16 @@ fn compute_ibuf_decode(buf_size: usize) -> usize {
 // ---------------------------------------------------------------------------
 
 fn main() {
+    // Rust's runtime ignores SIGPIPE, so a write to a closed pipe returns
+    // an error (`base91: Broken pipe` and status 1, e.g. under `| head`).
+    // Restore the default action: the process ends silently from the
+    // signal, as the C tool and other Unix filters do.
+    #[cfg(unix)]
+    // SAFETY: no other thread exists yet, and SIG_DFL is a valid action.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     if let Err(e) = run() {
         eprintln!("base91: {e}");
         std::process::exit(1);
