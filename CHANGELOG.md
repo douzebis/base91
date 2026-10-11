@@ -13,7 +13,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [0.3.2] - 2026-10-11
+
+SIMD encoding 19–32 % faster, `base91` quiet on a closed pipe, and the
+packaging work: the Nix build uses the nixpkgs recipes (spec 0012), and
+releases publish to crates.io again, on approval (spec 0013). No API or
+format change.
 
 ### Performance
 
@@ -310,7 +315,7 @@ implementation at <http://base91.sourceforge.net/>.
 Original C implementation by Joachim Henke.
 Source preserved unchanged in `src/`.
 
-[Unreleased]: https://github.com/douzebis/base91/compare/v0.3.1...HEAD
+[0.3.2]: https://github.com/douzebis/base91/releases/tag/v0.3.2
 [0.3.1]: https://github.com/douzebis/base91/releases/tag/v0.3.1
 [0.3.0]: https://github.com/douzebis/base91/releases/tag/v0.3.0
 [0.2.3]: https://github.com/douzebis/base91/releases/tag/v0.2.3

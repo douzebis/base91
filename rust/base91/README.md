@@ -41,7 +41,7 @@ hop from RAM to NIC to network switch.
 
 Benchmarked on an Intel Core Ultra 7 165U, on one performance core (no
 hyperthread contention), 1 MiB deterministic random input (seed
-`0xdeadbeef_cafebabe`), `cargo bench --bench throughput`, version 0.3.1,
+`0xdeadbeef_cafebabe`), `cargo bench --bench throughput`, version 0.3.2,
 one run. Absolute
 figures vary by up to about 10 % between sessions on this laptop chip;
 the ratios within one run hold.
@@ -51,11 +51,11 @@ Decode throughput is measured on encoded bytes (≈1.23× input).
 
 | Crate / variant | Encode | Decode |
 |---|---|---|
-| **`base91-rs` (`encode` / `decode`)** | **886 MiB/s** | **1182 MiB/s** |
-| **`base91-rs` slice API (`encode_slice` / `decode_slice`)** | **859 MiB/s** | **1241 MiB/s** |
-| `base91` v0.1.0 (dnsl48) | 657 MiB/s | 814 MiB/s |
+| **`base91-rs` (`encode` / `decode`)** | **892 MiB/s** | **1244 MiB/s** |
+| **`base91-rs` slice API (`encode_slice` / `decode_slice`)** | **929 MiB/s** | **1250 MiB/s** |
+| `base91` v0.1.0 (dnsl48) | 660 MiB/s | 760 MiB/s |
 
-**~1.3× faster encode, ~1.5× faster decode** than the next most popular
+**~1.4× faster encode, ~1.6× faster decode** than the next most popular
 crate.
 
 ### SIMD fixed-width variant (`--simd` flag / `simd` module)
@@ -68,10 +68,10 @@ output is safe to single-quote in any POSIX shell.
 
 | Path | Encode | Decode | vs. Henke slice API |
 |---|---|---|---|
-| scalar fixed-width | 2.51 GiB/s | 2.37 GiB/s | 3.0× / 2.0× |
-| simd128 (SSE4.1 / NEON) | 6.63 GiB/s | 9.97 GiB/s | 7.9× / 8.2× |
-| simd256 (AVX2) | 12.7 GiB/s | 16.5 GiB/s | 15.2× / 13.6× |
-| simd256, lines of 64 | 10.3 GiB/s | 17.1 GiB/s | 12.2× / 14.1× |
+| scalar fixed-width | 2.45 GiB/s | 2.31 GiB/s | 2.7× / 1.9× |
+| simd128 (SSE4.1 / NEON) | 8.18 GiB/s | 10.2 GiB/s | 9.0× / 8.3× |
+| simd256 (AVX2) | 16.0 GiB/s | 18.8 GiB/s | 17.6× / 15.4× |
+| simd256, lines of 64 | 13.1 GiB/s | 17.6 GiB/s | 14.5× / 14.4× |
 
 Decoding includes the strict validation. The SIMD kernel auto-selects the
 best available level at runtime (AVX2 → SSE4.1 → NEON → scalar). On

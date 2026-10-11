@@ -85,13 +85,13 @@ but the decoder auto-detects the format — plain `base91 -d` decodes both.
   does, ignoring bytes outside the alphabet.
 
 Library throughput (Intel Core Ultra 7 165U, one performance core, 1 MiB,
-0.3.1; decode measured on encoded bytes):
+0.3.2; decode measured on encoded bytes):
 
 | Kernel | Encode | Decode |
 |---|---|---|
-| scalar | 2.51 GiB/s | 2.37 GiB/s |
-| SSE4.1 / NEON | 6.63 GiB/s | 9.97 GiB/s |
-| AVX2 | 12.7 GiB/s | 16.5 GiB/s |
+| scalar | 2.45 GiB/s | 2.31 GiB/s |
+| SSE4.1 / NEON | 8.18 GiB/s | 10.2 GiB/s |
+| AVX2 | 16.0 GiB/s | 18.8 GiB/s |
 
 The best available kernel is selected automatically at runtime.
 

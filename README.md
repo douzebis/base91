@@ -27,7 +27,7 @@ payloads and fewer bytes on the wire at every hop.
 ## Performance (Rust)
 
 Benchmarked on an Intel Core Ultra 7 165U, on one performance core, 1 MiB
-deterministic random input, version 0.3.1, one run. Absolute
+deterministic random input, version 0.3.2, one run. Absolute
 figures vary by up to about 10 % between sessions on this laptop chip;
 the ratios within one run hold.
 
@@ -35,9 +35,9 @@ the ratios within one run hold.
 
 | Variant | Encode | Decode |
 |---|---|---|
-| `encode` / `decode` | 886 MiB/s | 1182 MiB/s |
-| `encode_slice` / `decode_slice` | 859 MiB/s | 1241 MiB/s |
-| `base91` v0.1.0 (dnsl48) | 657 MiB/s | 814 MiB/s |
+| `encode` / `decode` | 892 MiB/s | 1244 MiB/s |
+| `encode_slice` / `decode_slice` | 929 MiB/s | 1250 MiB/s |
+| `base91` v0.1.0 (dnsl48) | 660 MiB/s | 760 MiB/s |
 
 ### SIMD fixed-width variant (`--simd`)
 
@@ -48,9 +48,9 @@ shell.
 
 | Kernel | Encode | Decode |
 |---|---|---|
-| scalar | 2.51 GiB/s | 2.37 GiB/s |
-| SSE4.1 / NEON | 6.63 GiB/s | 9.97 GiB/s |
-| AVX2 | 12.7 GiB/s | 16.5 GiB/s |
+| scalar | 2.45 GiB/s | 2.31 GiB/s |
+| SSE4.1 / NEON | 8.18 GiB/s | 10.2 GiB/s |
+| AVX2 | 16.0 GiB/s | 18.8 GiB/s |
 
 SIMD streams are decoded strictly: damage is reported with its offset
 instead of producing wrong data.
