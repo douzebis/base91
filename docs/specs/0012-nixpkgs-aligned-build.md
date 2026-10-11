@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0012 — Build with the nixpkgs recipes, and get them into nixpkgs
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-11
 
 ## Problem
 

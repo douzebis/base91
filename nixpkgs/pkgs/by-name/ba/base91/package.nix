@@ -18,13 +18,13 @@ rustPlatform.buildRustPackage (finalAttrs: {
     owner = "douzebis";
     repo = "base91";
     tag = "v${finalAttrs.version}";
-    hash = lib.fakeHash;
+    hash = "sha256-1v/kvv+IUoYmrs6MrBmnA4UYIRjN4KICW/Q0zaiiGq0=";
   };
 
   cargoRoot = "rust";
   buildAndTestSubdir = "rust/base91-cli";
 
-  cargoHash = lib.fakeHash;
+  cargoHash = "sha256-5ubqTQQz0OBZoe3Ql/e1H5S1cL1EhYVabcZ9FkfQzao=";
 
   nativeBuildInputs = [ installShellFiles ];
 
@@ -35,6 +35,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
   + lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
     $out/bin/base91 --man > base91.1
     installManPage base91.1
+    ln -s base91.1 $out/share/man/man1/b91enc.1
+    ln -s base91.1 $out/share/man/man1/b91dec.1
     installShellCompletion --cmd base91 \
       --bash <($out/bin/base91 --completions bash) \
       --zsh <($out/bin/base91 --completions zsh) \
