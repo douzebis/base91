@@ -270,6 +270,22 @@ rustc moves past 1.91 (clippy 1.95 already flags `manual_checked_ops` in
 `EncodeCore::encode_len`), and the `perf_sanity` thresholds, calibrated
 with 1.91, are re-measured.
 
+**Found while re-measuring (2026-10-11).** With the pin at
+`nixos-unstable` (rustc 1.98.1, LLVM 21.1 as with 1.91.1), SIMD encoding
+was 10–14 % slower on both core types; scalar encoding and all decoding
+were unchanged. The cause: in 1.98, `core::arch` implements
+`_mm_packus_epi16` and `_mm256_packus_epi16` generically (`simd_imax`,
+`simd_imin`, truncate) instead of with the `packuswb` intrinsics, and LLVM
+keeps the clamp (`vpmaxsw`, `vpminsw`) before the `vpackuswb` it
+re-forms: two more instructions in a loop of twenty. The encode kernels
+no longer pack: with `lo = vals − 91 hi` and both in 0–90, the 16-bit word
+`lo + 256 hi = vals + 165 hi` already holds the two output bytes in
+order, so one `pmullw` and one `paddw` replace the `pmullw`, `psubw`, two
+packs and the unpack. Both toolchains now generate the same loop (16
+vector instructions instead of 20). Encode is 19–32 % faster than with
+1.91 before the change, decode unchanged; `perf_sanity` is re-calibrated
+on this code.
+
 ### 5. One version
 
 - `rust/Cargo.toml` gains `[workspace.package] version` and

@@ -61,7 +61,7 @@ struct EncodeSse41 {
     mask13: __m128i,
     magic: __m128i,
     low_byte: __m128i,
-    n91: __m128i,
+    n165: __m128i,
     base: __m128i,
     gap: __m128i,
 }
@@ -77,7 +77,7 @@ impl EncodeSse41 {
             mask13: _mm_set1_epi32(0x1FFF_1FFF),
             magic: _mm_set1_epi16(MAGIC91 as i16),
             low_byte: _mm_set1_epi16(0x00FF),
-            n91: _mm_set1_epi16(91),
+            n165: _mm_set1_epi16(165),
             base: _mm_set1_epi8(0x23u8 as i8),
             gap: _mm_set1_epi8(0x26u8 as i8),
         }
@@ -117,7 +117,6 @@ unsafe fn encode_block_sse41(k: &EncodeSse41, input: *const u8, output: *mut u8)
     // -----------------------------------------------------------------------
     // Step 2: Divide each 13-bit value by 91.
     //   hi = mulhi_u16(vals, MAGIC91) >> SHIFT91
-    //   lo = vals - hi * 91
     // The shift is a 32-bit one, then a mask clears the bits it brings in
     // from the neighboring 16-bit lane: LLVM fuses a 16-bit shift with the
     // multiply-high into a 32-bit multiply of widened values (7 instructions
@@ -128,15 +127,16 @@ unsafe fn encode_block_sse41(k: &EncodeSse41, input: *const u8, output: *mut u8)
         _mm_srli_epi32(_mm_mulhi_epu16(vals, magic), SHIFT91),
         k.low_byte,
     );
-    let lo = _mm_sub_epi16(vals, _mm_mullo_epi16(hi, k.n91));
 
     // -----------------------------------------------------------------------
     // Step 3: Interleave lo/hi into output byte order [lo0,hi0,lo1,hi1,...].
+    //   With lo = vals - 91 hi, both in 0–90, the 16-bit word
+    //   lo + 256 hi = vals + 165 hi holds lo in its low byte and hi in its
+    //   high byte: the output order, without packing or shuffling. (Packing
+    //   costs two more instructions since Rust 1.98, whose _mm_packus_epi16
+    //   clamps explicitly before the pack.)
     // -----------------------------------------------------------------------
-    // Pack u16→u8 (values 0–90 are in range).
-    let lo8 = _mm_packus_epi16(lo, lo); // lo0..lo7 in bytes 0..7 (duplicated)
-    let hi8 = _mm_packus_epi16(hi, hi);
-    let interleaved = _mm_unpacklo_epi8(lo8, hi8); // [lo0,hi0,lo1,hi1,...]
+    let interleaved = _mm_add_epi16(vals, _mm_mullo_epi16(hi, k.n165));
 
     // -----------------------------------------------------------------------
     // Step 4: Map indices 0–90 to SIMD-alphabet characters.
@@ -277,7 +277,7 @@ struct EncodeAvx2 {
     mask13: __m256i,
     magic: __m256i,
     low_byte: __m256i,
-    n91: __m256i,
+    n165: __m256i,
     base: __m256i,
     gap: __m256i,
 }
@@ -296,7 +296,7 @@ impl EncodeAvx2 {
             mask13: _mm256_set1_epi32(0x1FFF_1FFF),
             magic: _mm256_set1_epi16(MAGIC91 as i16),
             low_byte: _mm256_set1_epi16(0x00FF),
-            n91: _mm256_set1_epi16(91),
+            n165: _mm256_set1_epi16(165),
             base: _mm256_set1_epi8(0x23u8 as i8),
             gap: _mm256_set1_epi8(0x26u8 as i8),
         }
@@ -339,12 +339,10 @@ unsafe fn encode_block_avx2(k: &EncodeAvx2, input: *const u8, output: *mut u8) {
         _mm256_srli_epi32(_mm256_mulhi_epu16(vals, magic), SHIFT91),
         k.low_byte,
     );
-    let lo = _mm256_sub_epi16(vals, _mm256_mullo_epi16(hi, k.n91));
 
-    // Step 3: Interleave lo/hi → [lo0,hi0,lo1,hi1,...].
-    let lo8 = _mm256_packus_epi16(lo, lo);
-    let hi8 = _mm256_packus_epi16(hi, hi);
-    let interleaved = _mm256_unpacklo_epi8(lo8, hi8);
+    // Step 3: Interleave lo/hi → [lo0,hi0,lo1,hi1,...], as in
+    // `encode_block_sse41`: lo + 256 hi = vals + 165 hi.
+    let interleaved = _mm256_add_epi16(vals, _mm256_mullo_epi16(hi, k.n165));
 
     // Step 4: Map to SIMD-alphabet.
     let base = k.base;

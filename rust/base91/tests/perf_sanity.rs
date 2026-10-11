@@ -27,36 +27,38 @@ const RUNS: usize = 51;
 
 /// Minimum ratios (encode, decode), calibrated on the dev machine at 70 % of
 /// the lowest ratio measured (spec 0009, decision 6), rounded down. Dev
-/// machine, 2026-09-28: Intel Core Ultra 7 165U, measured on a performance
-/// core (`taskset -c 8` in the dev VM), kernels of spec 0011, MB/s encode /
-/// decode, three runs:
+/// machine, 2026-10-11: Intel Core Ultra 7 165U, measured on a performance
+/// core (`taskset -c 8` in the dev VM), rustc 1.98.1, kernels of spec 0011
+/// with the pack-free interleave of spec 0012, MB/s encode / decode, six
+/// runs:
 ///
 /// | | encode | decode |
 /// |---|---|---|
-/// | legacy | 1005–1128 | 1167–1198 |
-/// | Scalar, W=0 | 2962–2996 | 2232–2334 |
-/// | Simd128, W=0 | 7540–8022 | 10433–10607 |
-/// | Simd256, W=0 | 15430–15722 | 19686–21051 |
-/// | Simd256, W=64 | 12275–13392 | 17680–18104 |
+/// | legacy | 1011–1077 | 1159–1186 |
+/// | Scalar, W=0 | 3047–3118 | 2246–2282 |
+/// | Simd128, W=0 | 9682–9694 | 10163–10370 |
+/// | Simd256, W=0 | 19689–21059 | 19098–21227 |
+/// | Simd256, W=64 | 16934–18162 | 16929–17746 |
 ///
-/// Ratios, lowest–highest over six runs: Simd128/Scalar 2.51–2.68 /
-/// 4.55–4.68; Simd256/Simd128 1.92–2.19 / 1.89–2.00; wrapped/unwrapped
-/// 0.71–0.87 / 0.85–0.90. On an efficiency core (`taskset -c 4`):
-/// 3.07–3.80 / 5.54–6.30; 1.05–1.07 / 0.93–1.04; 0.85–0.94 / 0.92.
+/// Ratios, lowest–highest over six runs: Simd128/Scalar 3.11–3.18 /
+/// 4.45–4.55; Simd256/Simd128 2.03–2.17 / 1.88–2.09; wrapped/unwrapped
+/// 0.80–0.90 / 0.80–0.93. On an efficiency core (`taskset -c 4`):
+/// 4.26–4.79 / 5.51–6.16; 1.02–1.03 / 1.04–1.16; 0.94–0.95 / 0.92–0.93.
 ///
 /// The Simd256/Simd128 thresholds are capped at 0.90 instead of 70 %:
 /// machines whose AVX2 units are half-width (efficiency cores, older AMD)
 /// run AVX2 at about the SSE4.1 speed, and the guard is only meant to catch
-/// AVX2 falling behind SSE4.1. The wrapped encode threshold went down with
-/// spec 0011 (decision 5): the kernels got faster, the per-line cost did not.
+/// AVX2 falling behind SSE4.1.
 ///
 /// With these measurement conditions the ratios vary by a few hundredths
 /// between runs, so the guards catch a code-generation regression like the
 /// ones recorded in spec 0011 ("Code-generation sensitivity") when it moves
-/// a ratio by more than about a third.
-const MIN_SIMD128_OVER_SCALAR: (f64, f64) = (1.75, 3.18);
+/// a ratio by more than about a third. The one of rustc 1.98 (spec 0012:
+/// `_mm_packus_epi16` became a clamp and a pack, 10–14 % on SIMD encode)
+/// stayed under the 1.91 thresholds.
+const MIN_SIMD128_OVER_SCALAR: (f64, f64) = (2.17, 3.11);
 const MIN_SIMD256_OVER_SIMD128: (f64, f64) = (0.90, 0.90);
-const MIN_WRAPPED_OVER_UNWRAPPED: (f64, f64) = (0.49, 0.59);
+const MIN_WRAPPED_OVER_UNWRAPPED: (f64, f64) = (0.56, 0.56);
 
 /// Throughput of `f`, in MB/s of original data: the fastest of `RUNS`
 /// runs, after one warm-up run.

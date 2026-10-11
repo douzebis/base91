@@ -20,6 +20,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Wrapped SIMD encoding: each line's LF is written in the kernel's line
   loop instead of a second pass, 3–5 % faster on a performance core,
   2.6 % on an efficiency core (spec 0011, addendum).
+- SSE4.1 and AVX2 encoding: the kernels interleave the two base-91 digits
+  with one multiply-add (`vals + 165·hi`) instead of two packs and an
+  unpack. 19–32 % faster than 0.3.1 on both core types; with rustc 1.98,
+  whose `_mm_packus_epi16` clamps before packing, 39–42 % (spec 0012 §4).
 
 ---
 
