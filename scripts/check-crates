@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+# Package base91-testkit, base91-rs and base91-cli as crates.io will receive
+# them, and test them from the .crate files alone (spec 0013 §2).
+#
+# Run from the repository root, with network access, in the release shell:
+#   nix-shell default.nix -A release-shell --run scripts/check-crates
+# (the dev shell works too).  Extra arguments go to `cargo package`.
+#
+# 1. `cargo package` builds each .crate and verifies it by compiling it on
+#    its own, against the packaged versions of the crates before it.
+# 2. Each .crate is unpacked outside the workspace and its tests run there,
+#    as a distribution packager would.
+# The .crate files are left in rust/target/package/.
+
+set -euo pipefail
+
+manifest=rust/Cargo.toml
+if [ ! -f "$manifest" ]; then
+    echo "check-crates: run from the repository root" >&2
+    exit 1
+fi
+
+# In dependency order: base91-rs and base91-cli test with base91-testkit,
+# base91-cli runs on base91-rs.
+crates=(base91-testkit base91-rs base91-cli)
+
+# Extra arguments go to `cargo package`, e.g. --allow-dirty to check a
+# working tree with uncommitted changes.
+cargo package --manifest-path "$manifest" --locked \
+    --workspace --exclude base91-fuzz "$@"
+
+pkgid=$(cargo pkgid --manifest-path "$manifest" -p base91-rs)
+version=${pkgid##*[#@]}
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+for crate in "${crates[@]}"; do
+    tar -xzf "rust/target/package/$crate-$version.crate" -C "$work"
+done
+
+# Each crate is tested with the crates before it patched to their unpacked
+# copies: those versions are not on crates.io yet at release time.
+patches=()
+for crate in "${crates[@]}"; do
+    echo "Testing $crate $version from its .crate"
+    (cd "$work/$crate-$version" &&
+        CARGO_TARGET_DIR="$work/target" cargo test "${patches[@]}")
+    patches+=(--config "patch.crates-io.$crate.path='$work/$crate-$version'")
+done
+
+echo "Packages ready:"
+ls -1 rust/target/package/*-"$version".crate

@@ -32,4 +32,4 @@ reference-tests = ["base91-testkit/reference"]
 
 [dev-dependencies]
 tempfile = "3"
-base91-testkit = { path = "../base91-testkit" }
+base91-testkit = { workspace = true }

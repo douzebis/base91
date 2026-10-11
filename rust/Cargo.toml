@@ -6,12 +6,14 @@
 members  = ["base91", "base91-cli", "base91-testkit", "base91/fuzz"]
 resolver = "2"
 
-# The one version of base91-rs, base91-cli and pybase91 (spec 0012 §5).
-# Between releases: the next version with a -dev suffix. The version of
-# base91-rs below must say the same: crates.io needs a version on the path
-# dependency, and cargo cannot take it from workspace.package.
+# The one version of base91-rs, base91-cli, base91-testkit and pybase91
+# (spec 0012 §5, spec 0013 §1). Between releases: the next version with a
+# -dev suffix. The versions of base91-rs and base91-testkit below must say
+# the same: crates.io needs a version on a path dependency, and cargo cannot
+# take it from workspace.package.
 [workspace.package]
 version = "0.3.2-dev"
 
 [workspace.dependencies]
-base91 = { package = "base91-rs", path = "base91", version = "0.3.2-dev", default-features = false }
+base91         = { package = "base91-rs", path = "base91", version = "0.3.2-dev", default-features = false }
+base91-testkit = { path = "base91-testkit", version = "0.3.2-dev" }

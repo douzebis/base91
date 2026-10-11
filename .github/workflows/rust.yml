@@ -11,12 +11,14 @@ on:
       - 'rust/**'
       - 'default.nix'
       - 'nixpkgs/**'
+      - 'scripts/**'
       - '.github/workflows/rust.yml'
   pull_request:
     paths:
       - 'rust/**'
       - 'default.nix'
       - 'nixpkgs/**'
+      - 'scripts/**'
       - '.github/workflows/rust.yml'
 
 jobs:
@@ -72,6 +74,12 @@ jobs:
       # nixfmt and version of the staged files (spec 0012 §6).
       - name: nixpkgs staging check
         run: nix-build default.nix -A nixpkgs-staging-check
+
+      # The crates as crates.io would receive them, tested from their
+      # .crate files alone (spec 0013 §2): a packaging defect shows here,
+      # not at release time.
+      - name: crates.io packages
+        run: nix-shell default.nix -A release-shell --run scripts/check-crates
 
       - name: cargo test (full matrix)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

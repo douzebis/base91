@@ -4,12 +4,15 @@
 
 [package]
 name        = "base91-testkit"
-version     = "0.0.0"
+version.workspace = true
 edition     = "2021"
 rust-version = "1.91"
-description = "Test oracles for base91-rs: a bit-by-bit model of the wire format (spec 0008) and the upstream basE91 0.6.0 C reference (spec 0009)"
-license     = "MIT"
-publish     = false
+description = "Test oracles of base91-rs (internal: no stability promise across versions): a bit-by-bit model of the wire format and the upstream basE91 0.6.0 C reference"
+# MIT, and BSD-3-Clause for the vendored basE91 0.6.0 C sources (compiled
+# only with the `reference` feature). Published so that the tests of the
+# base91-rs and base91-cli packages compile (spec 0013 §1).
+license     = "MIT AND BSD-3-Clause"
+repository  = "https://github.com/douzebis/base91"
 
 [features]
 # Compiles the vendored upstream basE91 0.6.0 (reference/basE91-0.6.0/) and

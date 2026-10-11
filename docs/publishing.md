@@ -1,43 +1,36 @@
 <!-- SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis) -->
 <!-- SPDX-License-Identifier: MIT -->
 
-# Publishing checklist
+# Publishing
 
-Three registries, in dependency order: crates.io first (PyPI and nixpkgs
-depend on it being published), then PyPI, then nixpkgs.
-
----
-
-## Pre-flight (all registries)
-
-- [x] All CI workflows green on `main` (Rust, Go, C, Python, REUSE).
-- [x] `CHANGELOG.md` has a dated release entry for the version being published.
-- [x] Git tag `v0.2.1` created and pushed.
-- [x] Git tag `v0.2.2` created and pushed.
+A `v*` tag publishes to crates.io and PyPI through
+`.github/workflows/publish.yaml`, each upload after the maintainer's
+approval (spec 0013, `docs/specs/0013-crates-io-publishing.md`). The
+release procedure, the one-time setup and the first upload of
+`base91-testkit` are in `nixpkgs/README.md`. nixpkgs follows by hand.
 
 ---
 
 ## 1. crates.io
 
-### 1a. `base91-rs` library crate — DONE
-
-- [x] Published at `https://crates.io/crates/base91-rs` (latest: v0.2.2)
-- Note: name `base91` was taken by `dnsl48`; published as `base91-rs`.
-
-### 1b. `base91-cli` binary crate — DONE
-
-- [x] Published at `https://crates.io/crates/base91-cli` (latest: v0.2.2)
+- `base91-rs` (`https://crates.io/crates/base91-rs`): the library. The
+  name `base91` was taken by `dnsl48`.
+- `base91-cli` (`https://crates.io/crates/base91-cli`): the `base91`
+  command.
+- `base91-testkit`: the test oracles, published so that the tests of the
+  other two compile from their packages (spec 0013 §1); internal.
+- Uploaded by `scripts/publish-crates`, after `scripts/check-crates` (which
+  CI also runs on every push). Authentication: trusted publishing,
+  environment `crates-io`.
 
 ---
 
-## 2. PyPI — `pybase91` — DONE
+## 2. PyPI — `pybase91`
 
-- [x] PyPI project `pybase91` created.
-- [x] Trusted Publisher configured: owner `douzebis`, repo `base91`,
-  workflow `pypi.yml`, environment `pypi`.
-- [x] Published at `https://pypi.org/project/pybase91/` (latest: v0.2.2)
-- Wheels: Linux x86_64 + aarch64 (manylinux_2_36), macOS x86_64 + aarch64,
-  sdist. Python 3.11–3.13.
+- `https://pypi.org/project/pybase91/`. Trusted publisher: owner
+  `douzebis`, repo `base91`, workflow `publish.yaml`, environment `pypi`.
+- Wheels: Linux x86_64 + aarch64 (manylinux_2_36), macOS x86_64 +
+  aarch64, sdist. Python 3.11–3.13.
 
 ---
 
@@ -58,8 +51,9 @@ release and PR procedure is in `nixpkgs/README.md`.
 
 | Registry  | Package      | Status |
 |-----------|--------------|--------|
-| crates.io | `base91-rs`  | published v0.2.2 |
-| crates.io | `base91-cli` | published v0.2.2 |
-| PyPI      | `pybase91`   | published v0.2.2 |
+| crates.io | `base91-rs`  | v0.2.2; from 0.3.2 by `publish.yaml` (spec 0013) |
+| crates.io | `base91-cli` | v0.2.2; from 0.3.2 by `publish.yaml` (spec 0013) |
+| crates.io | `base91-testkit` | first upload at 0.3.2 (spec 0013) |
+| PyPI      | `pybase91`   | by `publish.yaml` on each tag |
 | Go proxy  | `github.com/douzebis/base91/go` | live (automatic on tag) |
 | nixpkgs   | `base91`     | 0.1.0 (C); PRs #504523, #504526 open (spec 0012) |

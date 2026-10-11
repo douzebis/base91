@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0013 — Publish to crates.io from CI, on approval
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-11
 
 ## Problem
 

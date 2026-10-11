@@ -39,6 +39,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in `nixpkgs/`, from the local source; `base91.nix` and `-A base91-c` (the
   C 0.1.0 package) are gone (spec 0012).
 - One version, in `rust/Cargo.toml`; pybase91 takes it from there.
+- Releases publish to crates.io again, from CI: a `v*` tag runs
+  `publish.yaml`, which uploads the crates and pybase91 each after the
+  maintainer's approval (it replaces `pypi.yml`, which published to PyPI
+  on the tag push). `base91-testkit`, the test oracles, is published too,
+  so that the tests of `base91-rs` and `base91-cli` compile from their
+  packages (spec 0013).
 
 ---
 

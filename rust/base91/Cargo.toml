@@ -59,7 +59,7 @@ criterion  = { version = "0.5", features = ["html_reports"] }
 rand       = { version = "0.8", features = ["small_rng"] }
 sha2       = "0.10"
 base91-dnsl48 = { package = "base91", version = "0.1" }
-base91-testkit = { path = "../base91-testkit" }
+base91-testkit = { workspace = true }
 proptest   = { version = "1", default-features = false, features = ["std"] }
 
 [build-dependencies]

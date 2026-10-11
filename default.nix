@@ -431,6 +431,18 @@ let
   };
 
   # ---------------------------------------------------------------------------
+  # RELEASE SHELL — packaging and publishing the crates (spec 0013 §4):
+  # scripts/check-crates and scripts/publish-crates, which need the network
+  # and so run outside a Nix build. The toolchain comes from the nixpkgs pin,
+  # the dependencies from Cargo.lock; stdenv brings the C compiler the
+  # testkit's build script may need.
+  # ---------------------------------------------------------------------------
+  release-shell = pkgs.mkShell {
+    name = "base91-release";
+    nativeBuildInputs = [ pkgs.cargo pkgs.rustc pkgs.curl ];
+  };
+
+  # ---------------------------------------------------------------------------
   # DEVELOPMENT SHELL
   # ---------------------------------------------------------------------------
   dev-shell = pkgs.mkShell {
@@ -508,6 +520,7 @@ in
   nixpkgs-staging-check = nixpkgsStagingCheck;      # nixfmt + version of nixpkgs/
   base91-clib   = base91CLib;
   dev-shell     = dev-shell;
+  release-shell = release-shell;                    # scripts/check-crates, publish-crates
   rust-fmt      = rustFmt;
   rust-clippy   = rustClippy;
   rust-tests    = rustTests;

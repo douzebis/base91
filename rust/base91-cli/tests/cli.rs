@@ -73,11 +73,11 @@ fn run_as(
     (out.stdout, out.stderr, out.status)
 }
 
+/// A fixture of this crate's own `tests/fixtures` (a copy of base91-rs's,
+/// so that the tests also run from the published package, spec 0013 §2).
 fn fixture(name: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("base91/tests/fixtures")
+        .join("tests/fixtures")
         .join(name);
     std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read fixture {name}: {e}"))
 }
