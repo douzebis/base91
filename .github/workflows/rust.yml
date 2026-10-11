@@ -10,11 +10,13 @@ on:
     paths:
       - 'rust/**'
       - 'default.nix'
+      - 'nixpkgs/**'
       - '.github/workflows/rust.yml'
   pull_request:
     paths:
       - 'rust/**'
       - 'default.nix'
+      - 'nixpkgs/**'
       - '.github/workflows/rust.yml'
 
 jobs:
@@ -31,6 +33,11 @@ jobs:
           name: base91
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
         continue-on-error: true
+
+      # Every attribute evaluates without building anything first (spec
+      # 0012 §4): no import from derivation.
+      - name: evaluate (no IFD)
+        run: nix-instantiate default.nix --option allow-import-from-derivation false > /dev/null
 
       - name: cargo fmt
         run: nix-build default.nix -A rust-fmt
@@ -56,6 +63,15 @@ jobs:
       # it for later runs.
       - name: cargo test (aarch64, qemu)
         run: nix-build default.nix -A rust-tests-aarch64 --argstr testSeed "${{ github.sha }}"
+
+      # The staged nixpkgs recipe, built from the local source (spec 0012):
+      # what a nixpkgs PR submits. Its check phase runs the CLI's tests.
+      - name: base91 (staged nixpkgs recipe)
+        run: nix-build default.nix -A base91
+
+      # nixfmt and version of the staged files (spec 0012 §6).
+      - name: nixpkgs staging check
+        run: nix-build default.nix -A nixpkgs-staging-check
 
       - name: cargo test (full matrix)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

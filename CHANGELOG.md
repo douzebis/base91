@@ -25,6 +25,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unpack. 19–32 % faster than 0.3.1 on both core types; with rustc 1.98,
   whose `_mm_packus_epi16` clamps before packing, 39–42 % (spec 0012 §4).
 
+### Changed
+
+- `base91 --man` prints the man page; it replaces `build.rs`, which wrote
+  the page and the completions to Cargo's `OUT_DIR` (spec 0012).
+- `nix-build -A base91` and `-A pybase91` build the nixpkgs recipes staged
+  in `nixpkgs/`, from the local source; `base91.nix` and `-A base91-c` (the
+  C 0.1.0 package) are gone (spec 0012).
+- One version, in `rust/Cargo.toml`; pybase91 takes it from there.
+
 ---
 
 ## [0.3.1] - 2026-09-28

@@ -32,7 +32,6 @@ base91/
 │   │           └── post_build.rs  #  pyo3-stub-gen stub generator
 │   └── base91-cli/             #   CLI binary crate
 │       ├── Cargo.toml
-│       ├── build.rs            #     generates man page + shell completions at build time
 │       ├── src/
 │       │   ├── main.rs         #     base91 / b91enc / b91dec binary
 │       │   └── cli/            #     clap argument definitions
@@ -68,7 +67,8 @@ base91/
 ├── README.md
 ├── default.nix                 # Nix derivations (see below)
 ├── shell.nix                   # `nix-shell` entry point → dev-shell
-└── base91.nix                  # Legacy Nix package (Henke's C CLI)
+└── nixpkgs/                    # nixpkgs recipes for base91 and pybase91, staged
+                                #   (built by default.nix; see nixpkgs/README.md)
 ```
 
 ---
@@ -104,10 +104,10 @@ and is never enabled for published crate builds.
 
 ### Rust CLI crate (`rust/base91-cli`)
 
-Builds the `base91` binary (symlinked as `b91enc` and `b91dec`).  `build.rs`
-generates a man page (`base91.1`) and shell completions (bash, zsh, fish,
-elvish) into `$OUT_DIR` at build time using `clap_mangen` and
-`clap_complete`.  The man(3) pages for the C API live in
+Builds the `base91` binary (symlinked as `b91enc` and `b91dec`).  The
+binary prints its man page (`--man`, with `clap_mangen`) and its shell
+completions (`--completions SHELL`, with `clap_complete`); packagers install
+them from the built binary.  The man(3) pages for the C API live in
 `rust/base91-cli/man/man3/` as committed source files.
 
 ### Go module (`go/`)
@@ -157,9 +157,11 @@ cd rust/base91 && maturin develop --features python
 ### Nix derivations
 
 ```sh
-nix-build -A base91          # CLI binary + man page + completions
+nix-build -A base91          # CLI binary + man page + completions (staged nixpkgs recipe)
 nix-build -A base91-clib     # libbase91.{so,a} + base91.h (native C)
-nix-build -A pybase91         # Python wheel
+nix-build -A pybase91         # Python package (staged nixpkgs recipe)
+nix-build -A pybase91-stub-check    # committed pybase91.pyi is up to date
+nix-build -A nixpkgs-staging-check  # nixfmt + version of nixpkgs/
 nix-build -A go-tests         # runs Go test suite
 nix-build -A rust-tests       # runs Rust test suite
 nix-build -A rust-fmt

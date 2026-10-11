@@ -41,60 +41,16 @@ depend on it being published), then PyPI, then nixpkgs.
 
 ---
 
-## 3. nixpkgs — TODO
+## 3. nixpkgs
 
-**Current state:** Not yet submitted. Crates.io is live so this is unblocked.
-The derivation has been tested locally and builds successfully.
+Superseded by spec 0012 (`docs/specs/0012-nixpkgs-aligned-build.md`): the
+recipes are staged in `nixpkgs/`, built by `default.nix` and CI, and the
+release and PR procedure is in `nixpkgs/README.md`.
 
-- [ ] Sync `douzebis/nixpkgs` fork with upstream `master`.
-- [ ] Create branch `base91-init`.
-- [ ] Create `pkgs/by-name/ba/base91/package.nix`:
-  ```nix
-  { lib, rustPlatform, installShellFiles }:
-  rustPlatform.buildRustPackage {
-    pname   = "base91";
-    version = "0.2.2";
-
-    src = fetchFromGitHub {
-      owner = "douzebis";
-      repo  = "base91";
-      rev   = "v0.2.2";
-      hash  = ""; # TODO: compute with nix-prefetch-url or nix hash
-    } + "/rust";
-
-    cargoHash = ""; # TODO: compute with nix build --impure
-
-    cargoExtraArgs = "-p base91-cli";
-
-    nativeBuildInputs = [ installShellFiles ];
-
-    postInstall = ''
-      ln -s base91 $out/bin/b91enc
-      ln -s base91 $out/bin/b91dec
-      out_dir=$(find . -path "*/build/base91-cli-*/out" -maxdepth 6 | head -1)
-      if [ -n "$out_dir" ]; then
-        install -Dm444 "$out_dir/base91.1" $out/share/man/man1/base91.1
-        installShellCompletion --cmd base91 \
-          --bash "$out_dir/base91.bash" \
-          --zsh  "$out_dir/_base91" \
-          --fish "$out_dir/base91.fish"
-      fi
-    '';
-
-    meta = with lib; {
-      description = "basE91 binary-to-text encoder/decoder";
-      homepage    = "https://github.com/douzebis/base91";
-      license     = licenses.mit;
-      maintainers = [ maintainers.douzebis ];
-      mainProgram = "base91";
-      platforms   = platforms.unix;
-    };
-  }
-  ```
-- [ ] Add `douzebis` to `maintainers/maintainer-list.nix` if not present.
-- [ ] Build and test locally against nixpkgs master.
-- [ ] Open PR: `base91: init at 0.2.2`.
-- [ ] Respond to reviewer feedback. Merge time typically 2–6 weeks.
+- nixpkgs ships `base91` 0.1.0, the C implementation (NixOS/nixpkgs#409224).
+- NixOS/nixpkgs#504523 (`base91`, the Rust CLI) and #504526
+  (`python3Packages.pybase91`) are open at 0.2.2; both move to the first
+  release built from the staged recipes (0.3.2) before anything is merged.
 
 ---
 
@@ -106,4 +62,4 @@ The derivation has been tested locally and builds successfully.
 | crates.io | `base91-cli` | published v0.2.2 |
 | PyPI      | `pybase91`   | published v0.2.2 |
 | Go proxy  | `github.com/douzebis/base91/go` | live (automatic on tag) |
-| nixpkgs   | `base91`     | PR not yet opened |
+| nixpkgs   | `base91`     | 0.1.0 (C); PRs #504523, #504526 open (spec 0012) |

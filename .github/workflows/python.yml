@@ -9,12 +9,18 @@ on:
     branches: [main]
     paths:
       - 'rust/base91/**'
+      - 'rust/Cargo.toml'
+      - 'rust/Cargo.lock'
       - 'default.nix'
+      - 'nixpkgs/**'
       - '.github/workflows/python.yml'
   pull_request:
     paths:
       - 'rust/base91/**'
+      - 'rust/Cargo.toml'
+      - 'rust/Cargo.lock'
       - 'default.nix'
+      - 'nixpkgs/**'
       - '.github/workflows/python.yml'
 
 jobs:
@@ -32,5 +38,11 @@ jobs:
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
         continue-on-error: true
 
+      # The staged nixpkgs recipe, built from the local source (spec 0012):
+      # imports the extension and runs the Python tests.
       - name: build pybase91
         run: nix-build default.nix -A pybase91
+
+      # The committed type stub matches the generator (spec 0012 §2).
+      - name: pybase91 stub check
+        run: nix-build default.nix -A pybase91-stub-check

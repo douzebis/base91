@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: MIT
 
 { pkgs ? import (fetchTarball {
-    url    = "https://github.com/NixOS/nixpkgs/archive/23d72dabcb3b12469f57b37170fcbc1789bd7457.tar.gz";
-    sha256 = "sha256-z5NJPSBwsLf/OfD8WTmh79tlSU8XgIbwmk6qB1/TFzY=";
+    # Pinned to nixos-unstable @ e7439b6b14ad3cc35d05608ebca9bce01a25f5f8
+    # (2026-10-08, the same as yb): close to nixpkgs master, against which the
+    # staged nixpkgs recipes are submitted (spec 0012 §4).
+    url    = "https://github.com/NixOS/nixpkgs/archive/e7439b6b14ad3cc35d05608ebca9bce01a25f5f8.tar.gz";
+    sha256 = "19y4py973w62z4qb7gzn0chjs67ihxy8rbjb7g71iyk8yz7z5k8z";
   }) {}
   # Seed for the randomized tests (spec 0009). CI passes the commit hash, so
   # reruns of a commit test the same cases; null keeps the suite's default.
@@ -17,12 +20,16 @@ let
   # ---------------------------------------------------------------------------
   # CRANE (Rust build framework)
   # ---------------------------------------------------------------------------
-  cranePath = pkgs.fetchgit {
-    url    = "https://github.com/ipetkov/crane.git";
-    rev    = "80ceeec0dc94ef967c371dcdc56adb280328f591";
-    sha256 = "sha256-e1idZdpnnHWuosI3KsBgAgrhMR05T2oqskXCmNzGPq0=";
+  # Fetched at evaluation time: a fetcher derivation here would make every
+  # evaluation build it first (import from derivation, spec 0012 §4).
+  cranePath = builtins.fetchTarball {
+    url    = "https://github.com/ipetkov/crane/archive/80ceeec0dc94ef967c371dcdc56adb280328f591.tar.gz";
+    sha256 = "1b9yqvf9ihj5n8m6lkrr3lqy22h2c302ldy2lap7b737v9jrsn3v";
   };
   crane = pkgs.callPackage cranePath { inherit pkgs; };
+
+  # The version, from the workspace manifest (spec 0012 §5).
+  cargoVersion = (pkgs.lib.importTOML ./rust/Cargo.toml).workspace.package.version;
 
   # A second crane instance built from the aarch64 cross package set: its
   # derivations target aarch64-unknown-linux-gnu by themselves and, when
@@ -76,7 +83,7 @@ let
   rustCommon = {
     src        = rustSrc;
     pname      = "base91";
-    version    = "0.3.1";
+    version    = cargoVersion;
     strictDeps = true;
     nativeBuildInputs = [ pkgs.cargo pkgs.rustc ];
   };
@@ -264,61 +271,86 @@ let
   });
 
   # ---------------------------------------------------------------------------
-  # RUST PACKAGE (CLI binary + man page + completions)
+  # PACKAGES — the staged nixpkgs recipes, built from the local source
+  # (spec 0012 §4)
   # ---------------------------------------------------------------------------
-  base91Rust = crane.buildPackage (rustCommon // {
-    pname          = "base91-rust";
-    cargoArtifacts = rustDeps;
-    cargoExtraArgs = "-p base91-cli";
+  # The layout of the GitHub tarball that nixpkgs fetches (rust/ under the
+  # repository root), restricted to what the build reads.
+  localSource = pkgs.lib.cleanSourceWith {
+    src    = pkgs.lib.cleanSource ./.;
+    filter = path: type:
+      let rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
+      in (rel == "rust" || pkgs.lib.hasPrefix "rust/" rel)
+         && !(pkgs.lib.hasPrefix "rust/target" rel)
+         && !(pkgs.lib.hasPrefix "rust/rust_out" rel);
+  };
 
-    nativeBuildInputs = rustCommon.nativeBuildInputs ++ [
-      pkgs.installShellFiles
+  stagedBase91   = ./nixpkgs/pkgs/by-name/ba/base91/package.nix;
+  stagedPybase91 = ./nixpkgs/pkgs/development/python-modules/pybase91/default.nix;
+
+  # nixpkgs with base91 replaced by the staged recipe built from the local
+  # source, and pybase91 added: pybase91 takes base91's source and vendored
+  # crates, as it does in nixpkgs.
+  pkgsLocal = pkgs.extend (final: prev: {
+    base91 = (final.callPackage stagedBase91 { }).overrideAttrs (old: {
+      version   = cargoVersion;
+      src       = localSource;
+      # From Cargo.lock: no hash to update when dependencies change (the
+      # workspace has no git dependencies).
+      cargoDeps = final.rustPlatform.importCargoLock {
+        lockFile = ./rust/Cargo.lock;
+      };
+    });
+    pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
+      (pyFinal: pyPrev: {
+        pybase91 = pyFinal.callPackage stagedPybase91 { };
+      })
     ];
-
-    checkPhase = ''
-      echo "fmt:    ${rustFmt}"
-      echo "clippy: ${rustClippy}"
-      echo "tests:  ${rustTests}"
-    '';
-
-    postInstall = ''
-      # Symlinks for b91enc / b91dec
-      ln -s base91 $out/bin/b91enc
-      ln -s base91 $out/bin/b91dec
-
-      # Man page and shell completions are written to OUT_DIR by build.rs.
-      # Search all build output dirs (crane may reuse artifacts from the deps phase).
-      man1=$(find target -name "base91.1" 2>/dev/null | head -1)
-      if [ -n "$man1" ]; then
-        out_dir=$(dirname "$man1")
-        install -Dm444 "$man1" $out/share/man/man1/base91.1
-
-        installShellCompletion --cmd base91 \
-          --bash "$out_dir/base91.bash" \
-          --zsh  "$out_dir/_base91" \
-          --fish "$out_dir/base91.fish"
-
-        install -Dm444 "$out_dir/base91.elv" \
-          $out/share/elvish/lib/completions/base91.elv 2>/dev/null || true
-      else
-        echo "WARNING: build.rs output not found — man page and completions not installed" >&2
-      fi
-    '';
-
-    meta = with pkgs.lib; {
-      description = "basE91 binary-to-text encoder/decoder (Rust port)";
-      homepage    = "https://github.com/douzebis/base91";
-      license     = licenses.mit;
-      maintainers = [ ];
-      mainProgram = "base91";
-      platforms   = platforms.unix;
-    };
   });
 
-  # ---------------------------------------------------------------------------
-  # LEGACY C PACKAGE (preserved for reference / nixpkgs compat)
-  # ---------------------------------------------------------------------------
-  base91C = pkgs.callPackage ./base91.nix {};
+  # The staged files must pass nixpkgs's formatter and carry the right
+  # version (spec 0012 §6). Between releases, rust/Cargo.toml has the next
+  # version with a -dev suffix and the staged recipe an older one; for a
+  # release, both are equal.
+  stagedVersion = (pkgs.callPackage stagedBase91 { }).version;
+  nextRelease   = pkgs.lib.removeSuffix "-dev" cargoVersion;
+  stagedVersionOk =
+    if nextRelease != cargoVersion
+    then builtins.compareVersions stagedVersion nextRelease < 0
+    else stagedVersion == cargoVersion;
+  nixpkgsStagingCheck = pkgs.runCommand "base91-nixpkgs-staging-check" {
+    nativeBuildInputs = [ pkgs.nixfmt ];
+  } (''
+    nixfmt --check ${stagedBase91} ${stagedPybase91}
+  '' + pkgs.lib.optionalString (!stagedVersionOk) ''
+    echo "staged package.nix has version ${stagedVersion}, which does not fit" \
+      "rust/Cargo.toml's ${cargoVersion} (equal for a release, older during development)" >&2
+    exit 1
+  '' + ''
+    touch $out
+  '');
+
+  # The type stub is committed (maturin ships it in the wheel, with py.typed).
+  # Regenerate it and fail if it differs from the committed one, so a stale
+  # stub can never be released (spec 0012 §2).
+  pybase91StubCheck = crane.mkCargoDerivation (rustCommon // {
+    pname          = "pybase91-stub-check";
+    cargoArtifacts = rustDeps;
+    nativeBuildInputs = rustCommon.nativeBuildInputs ++ [ pythonBin ];
+    env.PYO3_PYTHON = pythonExecutable;
+    buildPhaseCargoCommand = ''
+      cp base91/pybase91.pyi "$TMPDIR/pybase91.pyi.committed"
+      cargo run --release --offline --locked -p base91-rs --bin post_build --features python
+      if ! diff -u "$TMPDIR/pybase91.pyi.committed" base91/pybase91.pyi; then
+        echo "error: rust/base91/pybase91.pyi is stale. Regenerate it with" >&2
+        echo "  (cd rust && cargo run -p base91-rs --bin post_build --features python)" >&2
+        echo "and commit the result." >&2
+        exit 1
+      fi
+    '';
+    doCheck = false;
+    installPhaseCommand = "mkdir -p $out";
+  });
 
   # ---------------------------------------------------------------------------
   # C LIBRARY — native C build from src/base91.{c,h}
@@ -331,7 +363,7 @@ let
   # ---------------------------------------------------------------------------
   base91CLib = pkgs.stdenv.mkDerivation {
     pname   = "libbase91";
-    version = "0.3.1";
+    version = cargoVersion;
     src     = ./src;
 
     nativeBuildInputs = [ pkgs.clang pkgs.llvmPackages.bintools ];
@@ -362,7 +394,7 @@ let
   # ---------------------------------------------------------------------------
   goTests = pkgs.stdenv.mkDerivation {
     pname   = "base91-go-tests";
-    version = "0.3.1";
+    version = cargoVersion;
 
     # Include go/ sources and the shared test fixtures from the Rust crate.
     src = pkgs.lib.cleanSourceWith {
@@ -392,72 +424,6 @@ let
 
     meta = with pkgs.lib; {
       description = "basE91 Go library tests";
-      homepage    = "https://github.com/douzebis/base91";
-      license     = licenses.mit;
-      platforms   = platforms.unix;
-    };
-  };
-
-  # ---------------------------------------------------------------------------
-  # PYTHON EXTENSION — PyO3 bindings via maturin
-  #
-  # Uses rustPlatform.maturinBuildHook (nixpkgs standard), not crane.
-  # cargoSetupHook vendors deps; maturinBuildHook drives the maturin build.
-  # ---------------------------------------------------------------------------
-  pybase91 = pkgs.python313Packages.buildPythonPackage {
-    pname    = "pybase91";
-    version  = "0.3.1";
-    pyproject = true;
-    src      = rustSrc;
-
-    cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
-      pname   = "pybase91";
-      version = "0.3.1";
-      src     = rustSrc;
-      hash    = "sha256-cCNAXpn5QiOtIBON8P7ADovYyfh3nS7GDGh5gqKD5zY=";
-    };
-
-    # maturin must be invoked from the crate subdirectory (not the workspace root)
-    buildAndTestSubdir = "base91";
-
-    nativeBuildInputs = [
-      pkgs.cargo
-      pkgs.rustc
-      pkgs.rustPlatform.cargoSetupHook
-      pkgs.rustPlatform.maturinBuildHook
-    ];
-
-    maturinBuildFlags = [ "--features" "python" ];
-
-    # The type stub is committed (maturin ships it in the wheel, with
-    # py.typed). Regenerate it and fail if it differs from the committed one,
-    # so a stale stub can never be built or released.
-    preBuild = ''
-      cp base91/pybase91.pyi "$TMPDIR/pybase91.pyi.committed"
-      cargo run --offline --locked -p base91-rs --bin post_build --features python
-      if ! diff -u "$TMPDIR/pybase91.pyi.committed" base91/pybase91.pyi; then
-        echo "error: rust/base91/pybase91.pyi is stale. Regenerate it with" >&2
-        echo "  (cd rust && cargo run -p base91-rs --bin post_build --features python)" >&2
-        echo "and commit the result." >&2
-        exit 1
-      fi
-    '';
-
-    # Importing the package loads the compiled extension: fails if the wheel
-    # has none, which maturin produces silently when it misdetects the
-    # bindings (spec 0004 §6, §7).
-    pythonImportsCheck = [ "pybase91" ];
-
-    # Python-side tests (spec 0006 §6: the streaming decoder, bug 5). The
-    # check phase runs from the workspace root, next to no pybase91 source
-    # directory, so the tests import the installed package.
-    nativeCheckInputs = [ pkgs.python313Packages.pytestCheckHook ];
-    enabledTestPaths  = [ "base91/python-tests" ];
-
-    env.PYO3_PYTHON = pythonExecutable;
-
-    meta = with pkgs.lib; {
-      description = "basE91 Python extension (Rust/PyO3)";
       homepage    = "https://github.com/douzebis/base91";
       license     = licenses.mit;
       platforms   = platforms.unix;
@@ -535,11 +501,12 @@ let
 
 in
 {
-  default       = base91Rust;
-  base91        = base91Rust;
-  base91-c      = base91C;
+  default       = pkgsLocal.base91;
+  base91        = pkgsLocal.base91;                  # staged nixpkgs recipe, local source
+  pybase91      = pkgsLocal.python3Packages.pybase91; # staged nixpkgs recipe, local source
+  pybase91-stub-check   = pybase91StubCheck;
+  nixpkgs-staging-check = nixpkgsStagingCheck;      # nixfmt + version of nixpkgs/
   base91-clib   = base91CLib;
-  pybase91      = pybase91;
   dev-shell     = dev-shell;
   rust-fmt      = rustFmt;
   rust-clippy   = rustClippy;

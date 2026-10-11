@@ -107,6 +107,10 @@ struct Cli {
     #[arg(long, value_name = "SHELL", hide = true)]
     completions: Option<Shell>,
 
+    /// Print the man page (roff) and exit. Used by packagers (spec 0012 §2).
+    #[arg(long, hide = true)]
+    man: bool,
+
     /// Input file (default: stdin).
     #[arg(value_name = "FILE")]
     file: Option<String>,
@@ -322,11 +326,20 @@ fn run() -> io::Result<()> {
 
     let cli = Cli::parse();
 
-    // Handle --completions early.
+    // Handle --completions and --man early.
     if let Some(shell) = cli.completions {
         let mut cmd = Cli::command();
         generate(shell, &mut cmd, "base91", &mut io::stdout());
         return Ok(());
+    }
+    if cli.man {
+        // No date: the page stays the same whatever the build environment.
+        return clap_mangen::Man::new(Cli::command())
+            .title("BASE91")
+            .section("1")
+            .source(concat!("base91 ", env!("CARGO_PKG_VERSION")))
+            .manual("User Commands")
+            .render(&mut io::stdout());
     }
 
     let decode = if cli.encode {

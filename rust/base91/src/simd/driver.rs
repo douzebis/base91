@@ -407,11 +407,7 @@ impl EncodeCore {
         };
         // Whole 13-bit groups from the pending bits and 8n new ones.
         let chars = 2 * ((self.nbits as usize + 8 * n) / 13);
-        let newlines = if self.wrap == 0 {
-            0
-        } else {
-            (self.col + chars) / self.wrap
-        };
+        let newlines = (self.col + chars).checked_div(self.wrap).unwrap_or(0);
         header + chars + newlines
     }
 

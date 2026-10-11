@@ -14,7 +14,7 @@ pub const ALPHABET: &[u8; 91] =
     b"#$%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 
 /// Bytes treated as whitespace (spec 0008 §1).
-pub const WHITESPACE: [u8; 4] = [b' ', b'\t', b'\r', b'\n'];
+pub const WHITESPACE: [u8; 4] = *b" \t\r\n";
 
 /// Number of characters for the tail of `n mod 13` input bytes (§3.3, T).
 pub const TAIL_CHARS: [usize; 13] = [0, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15];

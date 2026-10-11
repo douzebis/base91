@@ -4,7 +4,7 @@
 
 [package]
 name        = "base91-cli"
-version     = "0.3.1"
+version.workspace = true
 edition     = "2021"
 rust-version = "1.91"
 description = "basE91 command-line encoder/decoder"
@@ -16,9 +16,10 @@ name = "base91"
 path = "src/main.rs"
 
 [dependencies]
-base91        = { version = "0.3.1", package = "base91-rs", path = "../base91", default-features = false, features = ["std", "io"] }
+base91        = { workspace = true, features = ["std", "io"] }
 clap          = { version = "4", features = ["derive"] }
 clap_complete = "4"
+clap_mangen   = "0.2"
 
 [features]
 # Compares the CLI with upstream basE91 0.6.0's own command-line tool, built
@@ -29,8 +30,3 @@ reference-tests = ["base91-testkit/reference"]
 [dev-dependencies]
 tempfile = "3"
 base91-testkit = { path = "../base91-testkit" }
-
-[build-dependencies]
-clap          = { version = "4", features = ["derive"] }
-clap_complete = "4"
-clap_mangen   = "0.2"

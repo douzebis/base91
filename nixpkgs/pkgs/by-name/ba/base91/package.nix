@@ -1,0 +1,65 @@
+{
+  lib,
+  stdenv,
+  rustPlatform,
+  fetchFromGitHub,
+  installShellFiles,
+  versionCheckHook,
+  nix-update-script,
+}:
+
+rustPlatform.buildRustPackage (finalAttrs: {
+  pname = "base91";
+  version = "0.3.1";
+
+  __structuredAttrs = true;
+
+  src = fetchFromGitHub {
+    owner = "douzebis";
+    repo = "base91";
+    tag = "v${finalAttrs.version}";
+    hash = lib.fakeHash;
+  };
+
+  cargoRoot = "rust";
+  buildAndTestSubdir = "rust/base91-cli";
+
+  cargoHash = lib.fakeHash;
+
+  nativeBuildInputs = [ installShellFiles ];
+
+  postInstall = ''
+    ln -s base91 $out/bin/b91enc
+    ln -s base91 $out/bin/b91dec
+  ''
+  + lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
+    $out/bin/base91 --man > base91.1
+    installManPage base91.1
+    installShellCompletion --cmd base91 \
+      --bash <($out/bin/base91 --completions bash) \
+      --zsh <($out/bin/base91 --completions zsh) \
+      --fish <($out/bin/base91 --completions fish)
+  '';
+
+  nativeInstallCheckInputs = [ versionCheckHook ];
+  doInstallCheck = true;
+
+  passthru.updateScript = nix-update-script { };
+
+  meta = {
+    description = "Binary-to-text encoder and decoder for the basE91 format";
+    longDescription = ''
+      base91 encodes binary data as printable ASCII with about 23% overhead
+      (base64: 33%). It reads and writes Joachim Henke's basE91 format, as
+      the original C tool does, and a fixed-width variant (--simd) that SSE4.1,
+      AVX2 and NEON encode and decode at several GiB/s. b91enc and b91dec are
+      the encoder and decoder under their traditional names.
+    '';
+    homepage = "https://github.com/douzebis/base91";
+    changelog = "https://github.com/douzebis/base91/blob/v${finalAttrs.version}/CHANGELOG.md";
+    license = lib.licenses.mit;
+    maintainers = with lib.maintainers; [ douzebis ];
+    mainProgram = "base91";
+    platforms = lib.platforms.unix;
+  };
+})
