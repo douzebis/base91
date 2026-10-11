@@ -14,7 +14,10 @@ command-line program, built from this repository's `v0.1.0` tag with
 Line by line:
 
 - **`rustPlatform.buildRustPackage (finalAttrs: …)`**: the standard Rust
-  builder; `finalAttrs` lets `src.tag` and `meta.changelog` use the version.
+  builder; `finalAttrs` lets `src.tag` use the version, and
+  `meta.changelog` use the fetched tag (`finalAttrs.src.rev`, which
+  `fetchFromGitHub` sets to `refs/tags/v0.3.2`; GitHub resolves that
+  path), so the tag's spelling is written once.
 - **`src = fetchFromGitHub { …; tag = "v${finalAttrs.version}"; hash }`**:
   `tag` instead of `rev` is the current nixpkgs convention for tags.  The
   hash was cross-checked with `nix-prefetch-url --unpack` on the tag's

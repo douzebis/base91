@@ -53,12 +53,13 @@ rustPlatform.buildRustPackage (finalAttrs: {
     longDescription = ''
       base91 encodes binary data as printable ASCII with about 23% overhead
       (base64: 33%). It reads and writes Joachim Henke's basE91 format, as
-      the original C tool does, and a fixed-width variant (--simd) that SSE4.1,
-      AVX2 and NEON encode and decode at several GiB/s. b91enc and b91dec are
+      the original C tool does. It also offers a fixed-width variant of the
+      format (--simd), designed for SIMD instructions: with SSE4.1, AVX2 or
+      NEON, it encodes and decodes at several GiB/s. b91enc and b91dec are
       the encoder and decoder under their traditional names.
     '';
     homepage = "https://github.com/douzebis/base91";
-    changelog = "https://github.com/douzebis/base91/blob/v${finalAttrs.version}/CHANGELOG.md";
+    changelog = "https://github.com/douzebis/base91/blob/${finalAttrs.src.rev}/CHANGELOG.md";
     license = lib.licenses.mit;
     maintainers = with lib.maintainers; [ douzebis ];
     mainProgram = "base91";
