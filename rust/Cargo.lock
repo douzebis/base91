@@ -102,7 +102,7 @@ checksum = "b4eb5fbae7b5ee422f239444a3dca9bdf5ecb3abf3af1bf87c8097db3f7bc025"
 
 [[package]]
 name = "base91-cli"
-version = "0.3.2"
+version = "0.3.3-dev"
 dependencies = [
  "base91-rs",
  "base91-testkit",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "base91-rs"
-version = "0.3.2"
+version = "0.3.3-dev"
 dependencies = [
  "base91",
  "base91-testkit",
@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "base91-testkit"
-version = "0.3.2"
+version = "0.3.3-dev"
 dependencies = [
  "cc",
  "sha2",
