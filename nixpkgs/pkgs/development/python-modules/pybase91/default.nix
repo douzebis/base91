@@ -4,6 +4,8 @@
   buildPythonPackage,
   rustPlatform,
   pytestCheckHook,
+  python,
+  runCommand,
 }:
 
 buildPythonPackage (finalAttrs: {
@@ -28,10 +30,35 @@ buildPythonPackage (finalAttrs: {
 
   pythonImportsCheck = [ "pybase91" ];
 
+  # A minimal test program, as nixpkgs has no package using this library:
+  # the bindings must encode exactly as the base91 command, and decode back.
+  passthru.tests.matches-cli =
+    runCommand "pybase91-matches-cli"
+      {
+        nativeBuildInputs = [
+          base91
+          (python.withPackages (_: [ finalAttrs.finalPackage ]))
+        ];
+      }
+      ''
+        python3 - <<'EOF'
+        import subprocess
+        import pybase91
+
+        data = bytes(range(256)) * 41 + b"basE91"
+        encoded = subprocess.run(
+            ["b91enc"], input=data, capture_output=True, check=True
+        ).stdout
+        assert pybase91.encode(data) == encoded
+        assert pybase91.decode(encoded) == data
+        EOF
+        touch $out
+      '';
+
   meta = {
     description = "Python bindings to base91-rs, a basE91 encoder and decoder";
     homepage = "https://github.com/douzebis/base91";
-    changelog = "https://github.com/douzebis/base91/blob/v${finalAttrs.version}/CHANGELOG.md";
+    changelog = "https://github.com/douzebis/base91/blob/${finalAttrs.src.rev}/CHANGELOG.md";
     license = lib.licenses.mit;
     maintainers = with lib.maintainers; [ douzebis ];
   };

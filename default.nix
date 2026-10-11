@@ -294,7 +294,9 @@ let
   pkgsLocal = pkgs.extend (final: prev: {
     base91 = (final.callPackage stagedBase91 { }).overrideAttrs (old: {
       version   = cargoVersion;
-      src       = localSource;
+      # rev, as fetchFromGitHub sets it: the recipes' meta.changelog links to
+      # it (a local build's changelog is the one on main).
+      src       = localSource // { rev = "refs/heads/main"; };
       # From Cargo.lock: no hash to update when dependencies change (the
       # workspace has no git dependencies).
       cargoDeps = final.rustPlatform.importCargoLock {
