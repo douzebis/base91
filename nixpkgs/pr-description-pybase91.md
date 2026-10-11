@@ -1,10 +1,7 @@
 python3Packages.pybase91: init at 0.3.2
 
-**Depends on #504523** (`base91: 0.1.0 -> 0.3.2`): this
-package takes `base91`'s source and vendored crates.  Until that PR is
-merged, this branch carries its commit too; **only the second commit,
-`python3Packages.pybase91: init at 0.3.2`, belongs to this PR**.  I will
-rebase onto master once #504523 is merged.
+Follows #504523 (`base91: 0.1.0 -> 0.3.2`, merged): this package takes
+`base91`'s source and vendored crates.
 
 Add `python3Packages.pybase91`, Python bindings (PyO3) to base91-rs, the
 Rust library behind the `base91` command, for Joachim Henke's basE91

@@ -5,13 +5,14 @@
   fetchFromGitHub,
   installShellFiles,
   versionCheckHook,
+
+  # passthru
   nix-update-script,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "base91";
   version = "0.3.2";
-
   __structuredAttrs = true;
 
   src = fetchFromGitHub {

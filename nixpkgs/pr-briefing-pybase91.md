@@ -6,12 +6,12 @@ automation/AI policy).
 
 ## The stack
 
-The PR depends on #504523 (`base91: 0.1.0 -> 0.3.2`): pybase91 takes
-`base91`'s `version`, `src` and `cargoDeps`, which master's `base91`
-(the C 0.1.0 package) does not have.  So the branch carries two commits,
-the `base91` one first.  Once #504523 is merged: rebase the branch onto
-master (the `base91` commit disappears), force-push, update the
-description's first paragraph, mark ready.
+The PR followed #504523 (`base91: 0.1.0 -> 0.3.2`): pybase91 takes
+`base91`'s `version`, `src` and `cargoDeps`, which master's `base91` had
+only once that PR was merged (2026-10-11, merge bot, approved by
+Sigmanificient).  Until then the branch carried both commits; it is now
+rebased onto master and holds only `python3Packages.pybase91: init at
+0.3.2`.
 
 ## What it adds (2 files)
 
@@ -98,7 +98,7 @@ has to.
 
 ## Before marking ready
 
-- #504523 merged; branch rebased onto master; description's first
-  paragraph updated.
+- (Done: #504523 merged; branch rebased onto master; description
+  updated.)
 - Read the diff and this file.
 - PR CI green.
