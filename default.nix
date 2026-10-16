@@ -66,7 +66,7 @@ let
   # rejects features of packages a command does not select, so attributes
   # selecting only the library use the first variable.
   referenceTestsFeature    = "--features base91-rs/reference-tests";
-  referenceTestsFeatureAll = "--features base91-rs/reference-tests,base91-cli/reference-tests,base91-fuzz/reference";
+  referenceTestsFeatureAll = "--features base91-rs/reference-tests,base91-cli/reference-tests,base91-capi/reference-tests,base91-fuzz/reference";
 
   # Source tree extended with src/base91.{c,h} for bench builds that enable
   # --features c-compat-tests.  The C files are placed at src/ relative to
@@ -100,10 +100,14 @@ let
     pname = "base91-fmt";
   });
 
+  # With the Python bindings too (python.rs), hence the interpreter pyo3's
+  # build script needs.
   rustClippy = crane.cargoClippy (rustCommon // {
     pname                = "base91-clippy";
     cargoArtifacts       = rustDeps;
-    cargoClippyExtraArgs = "${referenceTestsFeatureAll} -- --deny warnings";
+    nativeBuildInputs    = rustCommon.nativeBuildInputs ++ [ pythonBin ];
+    env.PYO3_PYTHON      = pythonExecutable;
+    cargoClippyExtraArgs = "${referenceTestsFeatureAll},base91-rs/python -- --deny warnings";
   });
 
   # Tests run optimized (crane's release profile) but with debug assertions
@@ -287,6 +291,7 @@ let
 
   stagedBase91   = ./nixpkgs/pkgs/by-name/ba/base91/package.nix;
   stagedPybase91 = ./nixpkgs/pkgs/development/python-modules/pybase91/default.nix;
+  stagedLibbase91 = ./nixpkgs/pkgs/by-name/li/libbase91/package.nix;
 
   # nixpkgs with base91 replaced by the staged recipe built from the local
   # source, and pybase91 added: pybase91 takes base91's source and vendored
@@ -303,6 +308,9 @@ let
         lockFile = ./rust/Cargo.lock;
       };
     });
+    # The C library (spec 0014 §4): it takes base91's version, source and
+    # crates, as in nixpkgs.
+    libbase91 = final.callPackage stagedLibbase91 { };
     pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
       (pyFinal: pyPrev: {
         pybase91 = pyFinal.callPackage stagedPybase91 { };
@@ -323,7 +331,7 @@ let
   nixpkgsStagingCheck = pkgs.runCommand "base91-nixpkgs-staging-check" {
     nativeBuildInputs = [ pkgs.nixfmt ];
   } (''
-    nixfmt --check ${stagedBase91} ${stagedPybase91}
+    nixfmt --check ${stagedBase91} ${stagedPybase91} ${stagedLibbase91}
   '' + pkgs.lib.optionalString (!stagedVersionOk) ''
     echo "staged package.nix has version ${stagedVersion}, which does not fit" \
       "rust/Cargo.toml's ${cargoVersion} (equal for a release, older during development)" >&2
@@ -353,43 +361,6 @@ let
     doCheck = false;
     installPhaseCommand = "mkdir -p $out";
   });
-
-  # ---------------------------------------------------------------------------
-  # C LIBRARY — native C build from src/base91.{c,h}
-  #
-  # Installs:
-  #   $out/lib/libbase91.so
-  #   $out/lib/libbase91.a
-  #   $out/include/base91.h
-  # Drop-in replacement for / identical to Joachim Henke's reference.
-  # ---------------------------------------------------------------------------
-  base91CLib = pkgs.stdenv.mkDerivation {
-    pname   = "libbase91";
-    version = cargoVersion;
-    src     = ./src;
-
-    nativeBuildInputs = [ pkgs.clang pkgs.llvmPackages.bintools ];
-
-    buildPhase = ''
-      clang -O3 -fno-plt -fPIC -shared -o libbase91.so base91.c
-      clang -O3 -fno-plt -c base91.c -o base91.o
-      llvm-ar crs libbase91.a base91.o
-    '';
-
-    installPhase = ''
-      mkdir -p $out/lib $out/include
-      cp libbase91.so $out/lib/
-      cp libbase91.a  $out/lib/
-      cp base91.h     $out/include/
-    '';
-
-    meta = with pkgs.lib; {
-      description = "basE91 C library (native C, drop-in replacement)";
-      homepage    = "https://github.com/douzebis/base91";
-      license     = licenses.bsd3;
-      platforms   = platforms.unix;
-    };
-  };
 
   # ---------------------------------------------------------------------------
   # GO LIBRARY — pure Go, zero cgo
@@ -520,7 +491,7 @@ in
   pybase91      = pkgsLocal.python3Packages.pybase91; # staged nixpkgs recipe, local source
   pybase91-stub-check   = pybase91StubCheck;
   nixpkgs-staging-check = nixpkgsStagingCheck;      # nixfmt + version of nixpkgs/
-  base91-clib   = base91CLib;
+  libbase91     = pkgsLocal.libbase91;                 # staged nixpkgs recipe, local source
   dev-shell     = dev-shell;
   release-shell = release-shell;                    # scripts/check-crates, publish-crates
   rust-fmt      = rustFmt;

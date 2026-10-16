@@ -173,8 +173,24 @@ impl Encoder {
         n
     }
 
+    /// An encoder in the given state (Henke's `queue`, `nbits`).
+    pub(crate) fn from_state(queue: u32, nbits: u32) -> Self {
+        Self { queue, nbits }
+    }
+
+    /// The state: Henke's `queue`, `nbits`.
+    pub(crate) fn state(&self) -> (u32, u32) {
+        (self.queue, self.nbits)
+    }
+
+    /// Upper bound on what `encode_uninit` writes for `n` input bytes from
+    /// this state: two characters per group of at least 13 bits.
+    pub(crate) fn encode_len(&self, n: usize) -> usize {
+        2 * ((self.nbits as usize + 8 * n) / 13)
+    }
+
     /// Bytes `finish` writes: 0, 1 or 2.
-    fn finish_len(&self) -> usize {
+    pub(crate) fn finish_len(&self) -> usize {
         match self.nbits {
             0 => 0,
             _ if self.nbits > 7 || self.queue > 90 => 2,
@@ -319,6 +335,25 @@ impl Decoder {
             return Err(Error::BufferTooSmall { needed });
         }
         Ok(self.finish_uninit(crate::as_uninit(output)))
+    }
+
+    /// A decoder in the given state (Henke's `queue`, `nbits`, and `val`,
+    /// `u32::MAX` for Henke's -1: no pending character).
+    pub(crate) fn from_state(queue: u32, nbits: u32, val: u32) -> Self {
+        Self { queue, nbits, val }
+    }
+
+    /// The state: Henke's `queue`, `nbits`, `val` (`u32::MAX` for -1).
+    pub(crate) fn state(&self) -> (u32, u32, u32) {
+        (self.queue, self.nbits, self.val)
+    }
+
+    /// Exact upper bound on what `decode_uninit` writes for `n` input
+    /// bytes from this state: at most 14 bits per pair of characters, a
+    /// pending character included.
+    pub(crate) fn decode_len_exact(&self, n: usize) -> usize {
+        let pairs = (n + usize::from(self.val != u32::MAX)) / 2;
+        (self.nbits as usize + 14 * pairs) / 8
     }
 
     /// Upper bound on what one call decodes from `n` bytes: a character

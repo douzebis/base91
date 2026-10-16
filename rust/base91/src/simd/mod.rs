@@ -308,7 +308,7 @@ pub fn encode_slice(
 
 /// One-shot encoding into `out`, which holds `encoded_len(input.len(),
 /// wrap)` bytes (`wrap` already checked).
-fn encode_uninit(
+pub(crate) fn encode_uninit(
     input: &[u8],
     max_level: SimdLevel,
     wrap: usize,
@@ -353,7 +353,7 @@ pub fn decode_slice(input: &[u8], max_level: SimdLevel, output: &mut [u8]) -> Re
 /// One-shot decoding into `out`, which holds at least
 /// `decode_size_hint(input.len())` bytes: never less than the streaming
 /// decoder's bounds for a whole stream.
-fn decode_uninit(
+pub(crate) fn decode_uninit(
     input: &[u8],
     max_level: SimdLevel,
     out: &mut [MaybeUninit<u8>],

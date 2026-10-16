@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name        = "base91-capi"
+version.workspace = true
+edition     = "2021"
+rust-version = "1.91"
+description = "libbase91, the C library of base91-rs: Henke's basE91 API, binary compatible, and an API for both formats (spec 0014); built from source, not published to crates.io"
+license     = "MIT"
+repository  = "https://github.com/douzebis/base91"
+publish     = false
+
+[lib]
+# libbase91.so / .dylib and libbase91.a.
+name       = "base91"
+crate-type = ["cdylib", "staticlib"]
+
+[features]
+# Compares the Henke-compatible functions with upstream basE91 0.6.0, built
+# by base91-testkit (spec 0009). Needs a C compiler; enabled by the Nix test
+# attributes, never by default.
+reference-tests = ["base91-testkit/reference"]
+
+[dependencies]
+# std: the SIMD level is detected at run time (without std, base91-rs takes
+# it from the build's target features: scalar for a portable build).
+base91 = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+base91         = { workspace = true, features = ["std"] }
+base91-testkit = { workspace = true }

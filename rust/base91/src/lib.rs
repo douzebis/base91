@@ -2,60 +2,86 @@
 //
 // SPDX-License-Identifier: MIT
 
-//! basE91 binary-to-text encoding.
+//! base91, but faster: a SIMD variant at 25× the speed.
 //!
-//! A pure-Rust, `no_std`-compatible implementation of the basE91 algorithm
-//! invented by Joachim Henke.  Wire-format compatible with the C reference
-//! implementation at <http://base91.sourceforge.net/>.
+//! Two formats:
+//!
+//! - **Henke's format** (basE91, by Joachim Henke): the crate root
+//!   ([`encode`], [`decode`], [`Encoder`], [`Decoder`]).  Byte-compatible
+//!   with his C reference and with every base91 decoder; faster than both.
+//! - **The SIMD variant** ([`simd`]): a fixed-width layout that SSE4.1,
+//!   AVX2 and NEON encode and decode at several GiB/s.  Its streams start
+//!   with `-` and use an alphabet without `'`; its decoders read both
+//!   formats, and check SIMD streams strictly.
 //!
 //! # Quick start
 //!
 //! ```rust
+//! use base91::simd::{self, SimdLevel};
+//!
+//! // The SIMD variant; lines of 64 characters (0 for none, else a
+//! // multiple of 32).
+//! let encoded = simd::encode(b"Hello, world!", SimdLevel::default(), 64)?;
+//! assert_eq!(simd::decode(&encoded, SimdLevel::default())?, b"Hello, world!");
+//!
+//! // Henke's format.
 //! let encoded = base91::encode(b"Hello, world!");
-//! let decoded = base91::decode(&encoded);
-//! assert_eq!(decoded, b"Hello, world!");
+//! assert_eq!(base91::decode(&encoded), b"Hello, world!");
+//! # Ok::<(), base91::Error>(())
 //! ```
 //!
-//! # Streaming (in-memory)
+//! `SimdLevel::default()` lets the crate pick the best kernel of the CPU.
 //!
-//! For large or chunked inputs, pre-reserve with the size hints to avoid
-//! reallocation:
+//! # Streaming
 //!
-//! ```rust
-//! use base91::{Encoder, encode_size_hint};
-//!
-//! let input = b"some large input";
-//! let mut out = Vec::with_capacity(encode_size_hint(input.len()));
-//! let mut enc = Encoder::new();
-//! enc.encode(input, &mut out);
-//! enc.finish(&mut out);
-//! ```
-//!
-//! # The SIMD variant
-//!
-//! [`simd`] implements a fixed-width variant of basE91 (not compatible with
-//! the C reference), designed for SIMD kernels. Its streams start with `-`;
-//! Its decoders ([`simd::decode_slice`], `simd::decode`, …) recognize both formats. SIMD streams are decoded
-//! strictly: damage is reported as an [`Error`], with its position.
+//! The encoders and decoders produce exactly the one-shot result, however
+//! the input is split:
 //!
 //! ```rust
 //! use base91::simd::{self, SimdLevel};
 //!
-//! let encoded = simd::encode(b"Hello, world!", SimdLevel::default(), 64)?;
-//! assert_eq!(simd::decode(&encoded, SimdLevel::default())?, b"Hello, world!");
+//! let input = b"some large input";
+//! let mut out = Vec::new();
+//! let mut enc = simd::Encoder::new(SimdLevel::default(), 64)?;
+//! for chunk in input.chunks(4) {
+//!     enc.encode(chunk, &mut out);
+//! }
+//! enc.finish(&mut out);
+//! assert_eq!(out, simd::encode(input, SimdLevel::default(), 64)?);
 //!
-//! let damaged = [&encoded[..10], b" ", &encoded[10..]].concat();
-//! assert_eq!(
-//!     simd::decode(&damaged, SimdLevel::default()),
-//!     Err(base91::Error::InvalidCharacter { offset: 10 })
-//! );
+//! // Henke's format, with the size hint to avoid reallocation.
+//! let mut out = Vec::with_capacity(base91::encode_size_hint(input.len()));
+//! let mut enc = base91::Encoder::new();
+//! enc.encode(input, &mut out);
+//! enc.finish(&mut out);
+//! assert_eq!(out, base91::encode(input));
 //! # Ok::<(), base91::Error>(())
 //! ```
 //!
-//! # Without an allocator
+//! # Errors
 //!
-//! The slice API writes into caller-provided buffers and works without the
-//! `alloc` feature. Each call checks the buffer size before writing:
+//! SIMD streams are decoded strictly: damage is an [`Error`], with its
+//! offset in the input.
+//!
+//! ```rust
+//! use base91::{simd, Error};
+//!
+//! let result = simd::decode(b"-##\"##", simd::SimdLevel::default());
+//! assert_eq!(result, Err(Error::InvalidCharacter { offset: 3 }));
+//! ```
+//!
+//! The classes are `InvalidCharacter`, `InvalidLayout` (a line break where
+//! none belongs, lines of the wrong length, mixed LF / CR LF),
+//! `InvalidLength` and `InvalidValue`; `Error` implements `Display` and
+//! `std::error::Error`.  Henke's format never fails: as his C reference, the
+//! decoder ignores bytes outside the alphabet.
+//!
+//! # Without an allocator: the slice API
+//!
+//! The slice functions write into caller-provided buffers and work without
+//! the `alloc` feature.  Each checks the buffer against the size it needs
+//! before writing; a buffer too small gives `Error::BufferTooSmall {
+//! needed }` and is left untouched.
 //!
 //! ```rust
 //! use base91::simd::{self, SimdLevel};
@@ -69,15 +95,19 @@
 //! # Ok::<(), base91::Error>(())
 //! ```
 //!
+//! [`simd::encoded_len`] is the exact encoded size, [`simd::decode_size_hint`]
+//! a bound on the decoded one.  Henke's format has [`encode_slice`] /
+//! [`decode_slice`], and every streaming encoder and decoder has
+//! `encode_slice` / `decode_slice` and `finish_slice`.
+//!
 //! # `std::io` adapters
 //!
-//! With the `io` feature (default), `io::EncoderWriter` and
-//! `io::DecoderReader` wrap any `std::io::Write` / `std::io::Read` and
-//! handle buffering automatically:
+//! With the `io` feature (default), [`io::EncoderWriter`] and
+//! [`io::DecoderReader`] wrap any `std::io::Write` / `std::io::Read`:
 //!
 //! ```rust
-//! use base91::io::{EncoderWriter, DecoderReader};
-//! use std::io::{Write, Read};
+//! use base91::io::{DecoderReader, EncoderWriter};
+//! use std::io::{Read, Write};
 //!
 //! let mut enc = EncoderWriter::new(Vec::new());
 //! enc.write_all(b"Hello, world!").unwrap();
@@ -88,6 +118,32 @@
 //! dec.read_to_end(&mut decoded).unwrap();
 //! assert_eq!(decoded, b"Hello, world!");
 //! ```
+//!
+//! # Features and `no_std`
+//!
+//! Three levels, `std` ⊃ `alloc` ⊃ core:
+//!
+//! | Features | Environment | API |
+//! |---|---|---|
+//! | default (`std`, `io`) | hosted | everything, including the `io` adapters |
+//! | `default-features = false, features = ["alloc"]` | `no_std` with a heap | everything but the `io` adapters |
+//! | `default-features = false` | `no_std`, no heap | everything that does not return a `Vec` |
+//!
+//! Without `alloc`, the whole slice API is available (one-shot and
+//! streaming, both formats), with `Error`, the length functions and
+//! [`simd::detect`].
+//!
+//! **SIMD selection.** With `std`, the kernel is chosen at run time from the
+//! CPU's features.  Without `std`, it is chosen at compile time from the
+//! target features, so the SIMD variant runs the scalar kernel unless you
+//! enable them, e.g. `-C target-cpu=native` or
+//! `-C target-feature=+ssse3,+sse4.1` (x86_64), `+neon` (aarch64).
+//!
+//! **Soft-float targets.** On targets such as `x86_64-unknown-none` or
+//! `aarch64-unknown-none-softfloat`, the environment (typically a kernel)
+//! has not enabled the SIMD registers.  Do not enable SIMD target features
+//! there: the compiler then lowers the SIMD kernels to scalar code, which is
+//! correct but slower than the scalar kernel.
 
 // no_std unless the `std` feature is on (spec 0004 §1). Test builds keep std
 // for the test harness; the `std` *feature* stays off there, so they exercise
@@ -107,6 +163,15 @@ pub mod io;
 #[cfg(feature = "python")]
 pub mod python;
 pub mod simd;
+
+#[doc(hidden)]
+pub mod __capi;
+
+/// The README's examples, run as doctests, so that the encodings it shows
+/// stay true.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
 
 pub use codec::{Decoder, Encoder};
 pub use error::Error;
@@ -249,7 +314,7 @@ pub unsafe fn decode_unchecked(input: &[u8], output: *mut u8) -> usize {
 
 /// One-shot legacy encoding into `out`, which holds at least
 /// `encode_size_hint(input.len())` bytes.
-fn encode_uninit(input: &[u8], out: &mut [MaybeUninit<u8>]) -> usize {
+pub(crate) fn encode_uninit(input: &[u8], out: &mut [MaybeUninit<u8>]) -> usize {
     let mut enc = Encoder::new();
     let n = enc.encode_uninit(input, out);
     n + enc.finish_uninit(&mut out[n..])

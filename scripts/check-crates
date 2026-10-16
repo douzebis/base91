@@ -32,7 +32,7 @@ crates=(base91-testkit base91-rs base91-cli)
 # Extra arguments go to `cargo package`, e.g. --allow-dirty to check a
 # working tree with uncommitted changes.
 cargo package --manifest-path "$manifest" --locked \
-    --workspace --exclude base91-fuzz "$@"
+    --workspace --exclude base91-fuzz --exclude base91-bench --exclude base91-capi "$@"
 
 pkgid=$(cargo pkgid --manifest-path "$manifest" -p base91-rs)
 version=${pkgid##*[#@]}

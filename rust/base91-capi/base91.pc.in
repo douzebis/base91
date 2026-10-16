@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+prefix=@prefix@
+includedir=@includedir@
+libdir=@libdir@
+
+Name: base91
+Description: base91 encoding and decoding, with a SIMD variant (libbase91)
+URL: https://github.com/douzebis/base91
+Version: @version@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lbase91
+# What the static library (libbase91.a, with Rust's standard library) needs.
+Libs.private: @libs_private@

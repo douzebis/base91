@@ -7,7 +7,7 @@ name        = "base91-cli"
 version.workspace = true
 edition     = "2021"
 rust-version = "1.91"
-description = "basE91 command-line encoder/decoder"
+description = "base91, but faster: the command-line encoder and decoder, with a SIMD variant at 25× the speed"
 license     = "MIT"
 repository  = "https://github.com/douzebis/base91"
 

@@ -15,6 +15,35 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Python: the SIMD variant in `pybase91`: `simd_encode(data, wrap=0)`,
+  `simd_decode` (either format, detected), streaming `SimdEncoder` and
+  `SimdDecoder`, `simd_level()`, and `pybase91.Error` (a `ValueError` with
+  `kind` and `offset`). The existing Henke functions are unchanged
+  (spec 0014).
+- C: `libbase91` is now built from base91-rs (crate `base91-capi`, not on
+  crates.io): Henke's basE91 API (`struct basE91`, the five `basE91_*`
+  functions), binary compatible with basE91 0.6.0, and the `base91_*` API
+  for both formats, without allocation; `base91.h`, `base91.pc`, SONAME
+  `libbase91.so.0`. It replaces the build of Henke's C code
+  (`base91-clib`) (spec 0014).
+- Python wheels for CPython 3.14.
+
+### Changed
+
+- The crates.io page: "base91, but faster: a SIMD variant at 25× the
+  speed", a short README with the speed table, the detailed usage in the
+  crate documentation on docs.rs (as doctests), `simd` and `no-std`
+  keywords (spec 0015).
+- The throughput benchmark moved to the unpublished `base91-bench`:
+  `base91-rs` no longer has a `build.rs`, nor the `base91`, `criterion`,
+  `rand` and `cc` (dev-)dependencies (spec 0015).
+- `pyproject.toml` builds with the new `extension-module` feature; the
+  `python` feature alone no longer enables pyo3's `extension-module`
+  (the stub generator links libpython).
+- The migration guide from 0.2 moved to `docs/migrating-0.2.md`.
+
 ---
 
 ## [0.3.2] - 2026-10-11
@@ -91,8 +120,8 @@ against 0.3.0, strict checks included:
 ## [0.3.0] - 2026-09-28
 
 The driver-layer rewrite (spec 0010), with strict SIMD
-decoding, an error type and an allocation-free API. Breaking. See the
-README's "Migrating from 0.2" section.
+decoding, an error type and an allocation-free API. Breaking. See
+`docs/migrating-0.2.md`.
 
 ### Changed (breaking)
 

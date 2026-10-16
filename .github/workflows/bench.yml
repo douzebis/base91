@@ -48,7 +48,7 @@ jobs:
         working-directory: rust
         run: >
           cargo bench
-          -p base91-rs
+          -p base91-bench
           --bench throughput
           -- --output-format bencher
           2>&1 | tee ../bench-${{ matrix.os }}.txt

@@ -7,12 +7,12 @@ name        = "base91-rs"
 version.workspace = true
 edition     = "2021"
 rust-version = "1.91"
-description = "basE91 binary-to-text encoding — fast, no_std-compatible Rust implementation"
+description = "base91, but faster: a SIMD variant at 25× the speed"
 license     = "MIT"
 repository  = "https://github.com/douzebis/base91"
 readme      = "README.md"
-keywords    = ["base91", "encoding", "binary-to-text", "codec"]
-categories  = ["encoding"]
+keywords    = ["base91", "simd", "encoding", "binary-to-text", "no-std"]
+categories  = ["encoding", "no-std", "no-std::no-alloc"]
 
 [lib]
 name = "base91"
@@ -26,10 +26,6 @@ name = "post_build"
 path = "src/bin/post_build.rs"
 required-features = ["python"]
 
-[[bench]]
-name    = "throughput"
-harness = false
-
 [features]
 # std ⊃ alloc ⊃ core (spec 0004 §1). Without default features the crate is
 # no_std; `alloc` adds the Vec-based API.
@@ -38,10 +34,11 @@ std            = ["alloc"]
 alloc          = []
 io             = ["std"]
 python         = ["std", "pyo3", "pyo3-stub-gen", "pyo3-stub-gen-derive"]
-# Enables the C reference benchmarks and c-compat unit tests.
-# Requires gcc, objcopy, and ar on PATH, and src/base91.{c,h} two levels up.
-# Never enabled by default; not part of the published crate.
-c-compat-tests = ["dep:cc"]
+# The Python extension module itself: maturin builds with it (pyproject.toml).
+# pyo3's extension-module leaves libpython unlinked, as an extension must;
+# the stub generator (post_build, `--features python` alone) links it, since
+# pyo3-stub-gen renders default argument values with a real interpreter.
+extension-module = ["python", "pyo3/extension-module"]
 # Force scalar path even when SIMD is available (useful for benchmarking).
 force-scalar = []
 # Enables the tests against the vendored, unmodified upstream basE91 0.6.0
@@ -50,17 +47,11 @@ force-scalar = []
 reference-tests = ["base91-testkit/reference"]
 
 [dependencies]
-pyo3                 = { version = "0.26", features = ["extension-module"], optional = true }
+pyo3                 = { version = "0.26", optional = true }
 pyo3-stub-gen        = { version = "0.20", optional = true }
 pyo3-stub-gen-derive = { version = "0.20", optional = true }
 
 [dev-dependencies]
-criterion  = { version = "0.5", features = ["html_reports"] }
-rand       = { version = "0.8", features = ["small_rng"] }
 sha2       = "0.10"
-base91-dnsl48 = { package = "base91", version = "0.1" }
 base91-testkit = { workspace = true }
 proptest   = { version = "1", default-features = false, features = ["std"] }
-
-[build-dependencies]
-cc = { version = "1", optional = true }

@@ -95,7 +95,7 @@ jobs:
         with:
           working-directory: rust/base91
           target: ${{ matrix.target }}
-          args: --release --out dist --features python -i python3.11 python3.12 python3.13
+          args: --release --out dist --features extension-module -i python3.11 python3.12 python3.13 python3.14
           manylinux: 2_36
 
       # Every wheel must contain the compiled extension module (spec 0004

@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name        = "base91-bench"
+version     = "0.0.0"
+edition     = "2021"
+rust-version = "1.91"
+description = "Throughput benchmark of base91-rs, with the base91 crate and the C reference for comparison; never published"
+license     = "MIT"
+publish     = false
+
+[features]
+# Adds the C reference (src/base91.c, compiled by build.rs) to the
+# benchmark. Requires clang, objcopy and ar on PATH.
+c-compat-tests = ["dep:cc"]
+
+[build-dependencies]
+cc = { version = "1", optional = true }
+
+[dev-dependencies]
+base91        = { workspace = true, features = ["std"] }
+# The base91 crate by dnsl48 (0.1.0), the comparison of the README's table.
+base91-dnsl48 = { package = "base91", version = "0.1" }
+criterion     = { version = "0.5", features = ["html_reports"] }
+rand          = { version = "0.8", features = ["small_rng"] }
+
+[[bench]]
+name    = "throughput"
+harness = false

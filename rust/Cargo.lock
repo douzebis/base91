@@ -101,6 +101,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4eb5fbae7b5ee422f239444a3dca9bdf5ecb3abf3af1bf87c8097db3f7bc025"
 
 [[package]]
+name = "base91-bench"
+version = "0.0.0"
+dependencies = [
+ "base91",
+ "base91-rs",
+ "cc",
+ "criterion",
+ "rand 0.8.5",
+]
+
+[[package]]
+name = "base91-capi"
+version = "0.3.3-dev"
+dependencies = [
+ "base91-rs",
+ "base91-testkit",
+]
+
+[[package]]
 name = "base91-cli"
 version = "0.3.3-dev"
 dependencies = [
@@ -126,15 +145,11 @@ dependencies = [
 name = "base91-rs"
 version = "0.3.3-dev"
 dependencies = [
- "base91",
  "base91-testkit",
- "cc",
- "criterion",
  "proptest",
  "pyo3",
  "pyo3-stub-gen",
  "pyo3-stub-gen-derive",
- "rand 0.8.5",
  "sha2",
 ]
 

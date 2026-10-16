@@ -18,27 +18,30 @@ base91/
 │   └── cli.c                   #   original command-line front-end
 │
 ├── rust/                       # Rust workspace
-│   ├── Cargo.toml              #   workspace manifest (members: base91, base91-cli)
+│   ├── Cargo.toml              #   workspace manifest: the version, the members
 │   ├── Cargo.lock
-│   ├── base91/                 #   library crate (published to crates.io)
+│   ├── base91/                 #   base91-rs, the library (crates.io)
 │   │   ├── Cargo.toml
-│   │   ├── build.rs            #     compiles C reference for c-compat-tests feature
 │   │   └── src/
-│   │       ├── lib.rs          #     public API + size hints + encode/decode helpers
+│   │       ├── lib.rs          #     Henke's format, size hints, crate docs
 │   │       ├── codec.rs        #     Encoder / Decoder streaming types
+│   │       ├── simd/           #     the SIMD variant and its kernels
 │   │       ├── io.rs           #     std::io adapters (EncoderWriter, DecoderReader)
 │   │       ├── python.rs       #     PyO3 bindings (python feature)
+│   │       ├── __capi.rs       #     hidden support for base91-capi
 │   │       └── bin/
 │   │           └── post_build.rs  #  pyo3-stub-gen stub generator
-│   └── base91-cli/             #   CLI binary crate
-│       ├── Cargo.toml
-│       ├── src/
-│       │   ├── main.rs         #     base91 / b91enc / b91dec binary
-│       │   └── cli/            #     clap argument definitions
-│       ├── tests/
-│       │   └── cli.rs          #     subprocess integration tests
-│       └── man/
-│           └── man3/           #     committed man(3) pages for the C API
+│   ├── base91-cli/             #   base91-cli, the command (crates.io)
+│   │   ├── src/main.rs         #     base91 / b91enc / b91dec
+│   │   └── tests/              #     subprocess tests (cli.rs, end_to_end.rs)
+│   ├── base91-capi/            #   libbase91, the C library (not on crates.io)
+│   │   ├── src/lib.rs          #     Henke's basE91 API and the base91_* API
+│   │   ├── include/base91.h    #     the header
+│   │   ├── base91.pc.in        #     the pkg-config template
+│   │   └── tests/c/api.c       #     the C-side test
+│   ├── base91-testkit/         #   test oracles (crates.io, internal)
+│   ├── base91-bench/           #   the throughput benchmark (not published)
+│   └── base91/fuzz/            #   fuzz targets (not published)
 │
 ├── go/                         # Go module (published to pkg.go.dev)
 │   ├── go.mod                  #   module github.com/douzebis/base91/go
@@ -53,9 +56,12 @@ base91/
 │
 ├── .github/
 │   └── workflows/
-│       ├── rust.yml            #   fmt, clippy, test, MSRV
+│       ├── rust.yml            #   the Rust checks, the packages (see CI below)
+│       ├── python.yml          #   pybase91, the stub check
+│       ├── c.yml               #   libbase91 and its C-side tests
 │       ├── go.yml              #   go test, go vet
-│       ├── pypi.yml            #   maturin wheel build + PyPI publish on tag
+│       ├── bench.yml           #   the throughput benchmark
+│       ├── publish.yaml        #   crates.io and PyPI on a v* tag, on approval
 │       └── reuse.yml           #   REUSE/SPDX compliance check
 │
 ├── LICENSES/                   # Full license texts (REUSE requirement)
@@ -94,21 +100,22 @@ Pure-Rust, `no_std`-compatible implementation.  Features:
 
 | Feature          | Default | Description |
 |------------------|---------|-------------|
-| `std`            | yes     | Enables `std`-dependent impls |
+| `std`            | yes     | `std`-dependent impls; run-time SIMD detection |
+| `alloc`          | (`std`) | the `Vec`-returning API |
 | `io`             | yes     | `std::io` adapters (`EncoderWriter`, `DecoderReader`) |
-| `python`         | no      | PyO3 bindings for `pybase91` Python extension |
-| `c-compat-tests` | no      | Compiles `src/base91.c` for cross-validation benches |
+| `python`         | no      | PyO3 bindings for `pybase91` (and the stub generator) |
+| `extension-module` | no    | `python`, built as the extension module (maturin) |
+| `reference-tests` | no     | tests against Henke's basE91 0.6.0 (needs a C compiler) |
 
-The `c-compat-tests` feature requires `gcc`, `objcopy`, and `ar` on `PATH`,
-and is never enabled for published crate builds.
+The C reference benchmark (feature `c-compat-tests`) is in the unpublished
+`rust/base91-bench`.
 
 ### Rust CLI crate (`rust/base91-cli`)
 
 Builds the `base91` binary (symlinked as `b91enc` and `b91dec`).  The
 binary prints its man page (`--man`, with `clap_mangen`) and its shell
 completions (`--completions SHELL`, with `clap_complete`); packagers install
-them from the built binary.  The man(3) pages for the C API live in
-`rust/base91-cli/man/man3/` as committed source files.
+them from the built binary.
 
 ### Go module (`go/`)
 
@@ -158,7 +165,7 @@ cd rust/base91 && maturin develop --features python
 
 ```sh
 nix-build -A base91          # CLI binary + man page + completions (staged nixpkgs recipe)
-nix-build -A base91-clib     # libbase91.{so,a} + base91.h (native C)
+nix-build -A libbase91       # libbase91.{so,a}, base91.h, base91.pc (staged nixpkgs recipe)
 nix-build -A pybase91         # Python package (staged nixpkgs recipe)
 nix-build -A pybase91-stub-check    # committed pybase91.pyi is up to date
 nix-build -A nixpkgs-staging-check  # nixfmt + version of nixpkgs/
@@ -174,50 +181,12 @@ The `default` output is `base91` (the CLI).
 
 ## Publishing
 
-### crates.io — `base91`
-
-**Tag convention:** `v0.2.0` (repo root tag).
-
-```sh
-cargo publish --dry-run -p base91   # verify packaging
-cargo publish           -p base91
-```
-
-Pending before first publish: see `docs/publishing.md` §1 for the
-`c-compat-tests` path fix and README requirements.
-
-### PyPI — `pybase91`
-
-**Triggered automatically** by pushing a `v*` tag.  The
-`.github/workflows/pypi.yml` workflow builds `manylinux` and macOS wheels
-via `maturin-action` and uploads them using OIDC trusted publishing (no API
-token required).
-
-To publish manually:
-
-```sh
-cd rust/base91
-maturin build   --features python --release
-maturin publish --features python
-```
-
-### pkg.go.dev — `github.com/douzebis/base91/go`
-
-No explicit publish step.  The Go module proxy discovers the module
-automatically when anyone runs:
-
-```sh
-go get github.com/douzebis/base91/go@v0.2.0
-```
-
-**Tag convention for Go subdirectory modules:** `go/v0.2.0` (prefixed with
-the subdirectory path).  This is required by the Go module proxy to resolve
-the correct subtree of a multi-language monorepo.
-
-### nixpkgs
-
-See `docs/publishing.md` §3.  Blocked on the same `c-compat-tests` path fix
-that unblocks crates.io.
+A `v*` tag publishes the crates (`base91-testkit`, `base91-rs`,
+`base91-cli`) to crates.io and `pybase91` to PyPI, through
+`.github/workflows/publish.yaml`, each upload after the maintainer's
+approval (spec 0013). The release procedure, nixpkgs included, is in
+`nixpkgs/README.md`; the registries are listed in `docs/publishing.md`.
+The Go module proxy picks up `go/v*` tags by itself.
 
 ---
 
@@ -225,9 +194,12 @@ that unblocks crates.io.
 
 | Workflow      | Triggers                              | Jobs |
 |---------------|---------------------------------------|------|
-| `rust.yml`    | push/PR touching `rust/**`            | fmt, clippy, test, test-msrv (1.74) |
+| `rust.yml`    | push/PR touching `rust/**`, `nixpkgs/**`, `scripts/**` | evaluation without IFD, fmt, clippy, tests (x86_64, aarch64 under qemu), no_std, `base91`, the staging check, `check-crates` |
+| `python.yml`  | push/PR touching `rust/base91/**`     | `pybase91`, the stub check |
+| `c.yml`       | push/PR touching `src/**`, `rust/**`  | `libbase91` and its C-side tests |
 | `go.yml`      | push/PR touching `go/**`              | test, vet |
-| `pypi.yml`    | push of `v*` tag                      | build wheels, publish to PyPI |
+| `bench.yml`   | push/PR touching `rust/**`            | the throughput benchmark |
+| `publish.yaml`| push of a `v*` tag                    | check, package, approve, publish (crates.io, PyPI) |
 | `reuse.yml`   | push/PR (all files)                   | reuse lint |
 
 ---
@@ -235,6 +207,8 @@ that unblocks crates.io.
 ## License
 
 - All Rust and Go sources: **MIT** (`LICENSES/MIT.txt`)
-- C reference sources (`src/`): **BSD-3-Clause** (`LICENSES/BSD-3-Clause.txt`)
+- C reference sources (`src/`, `rust/base91-testkit/reference/`):
+  **BSD-3-Clause** (`LICENSES/BSD-3-Clause.txt`); `libbase91`'s header
+  declares Henke's API
 
 REUSE 3.3 compliance is enforced on every push via `reuse.yml`.

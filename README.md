@@ -6,13 +6,28 @@ SPDX-License-Identifier: MIT
 
 # base91
 
-Multi-language implementation of [Joachim Henke's basE91](http://base91.sourceforge.net/)
-binary-to-text encoding, with a high-performance Rust library, CLI, Go package,
-Python bindings, and C reference.
+**base91, but faster: a SIMD variant at 25× the speed.**
 
-basE91 encodes binary data into printable ASCII using only **~1.23 bytes per
-input byte** — versus Base64's 1.33.  The 8% overhead reduction means smaller
-payloads and fewer bytes on the wire at every hop.
+base91 encodes binary data as printable ASCII with about 23% overhead
+(base64: 33%). This project implements Joachim Henke's basE91 format, and a
+fixed-width SIMD variant that SSE4.1, AVX2 and NEON encode and decode at
+several GiB/s: a Rust library, the `base91` command, Python and C bindings,
+and a Go package.
+
+## Speed
+
+| Configuration | Encode | Decode |
+|---|---|---|
+| SIMD variant, AVX2 | **16.6 GiB/s** | **19.6 GiB/s** |
+| SIMD variant, AVX2, lines of 64 | 13.9 GiB/s | 18.3 GiB/s |
+| SIMD variant, SSE4.1 / NEON | 8.45 GiB/s | 10.7 GiB/s |
+| SIMD variant, scalar | 2.59 GiB/s | 2.42 GiB/s |
+| Henke's format | 894 MiB/s | 1287 MiB/s |
+| Henke's format, the `base91` crate 0.1.0 | 703 MiB/s | 720 MiB/s |
+
+The Rust library (base91-rs 0.3.3) on an Intel Core Ultra 7 165U, one
+performance core, 1 MiB of random data, criterion (`base91-bench`); decode
+speed is measured on the encoded bytes.
 
 ## Components
 
@@ -21,39 +36,9 @@ payloads and fewer bytes on the wire at every hop.
 | `rust/base91` | Rust | `base91-rs` library crate — `no_std`, SIMD-accelerated |
 | `rust/base91-cli` | Rust | `base91` CLI binary — drop-in replacement for the C CLI |
 | `go/` | Go | `base91` Go package |
-| `src/` | C | Henke's original C reference implementation (unmodified) |
 | Python bindings | Python/Rust | `pybase91` PyPI package via PyO3 + maturin |
-
-## Performance (Rust)
-
-Benchmarked on an Intel Core Ultra 7 165U, on one performance core, 1 MiB
-deterministic random input, version 0.3.2, one run. Absolute
-figures vary by up to about 10 % between sessions on this laptop chip;
-the ratios within one run hold.
-
-### Henke (wire-compatible) path
-
-| Variant | Encode | Decode |
-|---|---|---|
-| `encode` / `decode` | 892 MiB/s | 1244 MiB/s |
-| `encode_slice` / `decode_slice` | 929 MiB/s | 1250 MiB/s |
-| `base91` v0.1.0 (dnsl48) | 660 MiB/s | 760 MiB/s |
-
-### SIMD fixed-width variant (`--simd`)
-
-A non-Henke, fixed-width 13-bit block format that enables SIMD parallelism.
-Output begins with `-` and uses a contiguous 91-char alphabet (0x23–0x26,
-0x28–0x7E) that omits `'`, making output safe to single-quote in any POSIX
-shell.
-
-| Kernel | Encode | Decode |
-|---|---|---|
-| scalar | 2.45 GiB/s | 2.31 GiB/s |
-| SSE4.1 / NEON | 8.18 GiB/s | 10.2 GiB/s |
-| AVX2 | 16.0 GiB/s | 18.8 GiB/s |
-
-SIMD streams are decoded strictly: damage is reported with its offset
-instead of producing wrong data.
+| `rust/base91-capi` | C/Rust | `libbase91`: Henke's basE91 API, binary compatible, and an API for both formats |
+| `src/` | C | Henke's original C implementation, lightly modified (the C reference) |
 
 ## CLI quick start
 
@@ -101,8 +86,24 @@ pip install pybase91
 
 ```python
 import pybase91
-encoded = pybase91.encode(b"Hello, world!")
-decoded = pybase91.decode(encoded)
+
+encoded = pybase91.simd_encode(b"Hello, world!")  # the SIMD variant
+decoded = pybase91.simd_decode(encoded)           # either format
+encoded = pybase91.encode(b"Hello, world!")       # Henke's format
+```
+
+## C quick start
+
+`libbase91` (`rust/base91-capi`): Henke's basE91 API, binary compatible,
+and the `base91_*` API for both formats (`pkg-config base91`).
+
+```c
+#include <base91.h>
+
+char out[64];
+size_t n;
+if (base91_encode(BASE91_SIMD, "Hello, world!", 13, 0, out, sizeof out, &n) != BASE91_OK)
+	/* base91_strerror(code) says why */;
 ```
 
 ## Building with Nix
@@ -114,5 +115,11 @@ nix-shell          # development shell
 
 ## License
 
-MIT — see `LICENSES/MIT.txt`.
-Original C implementation © Joachim Henke, preserved unchanged in `src/`.
+MIT (`LICENSES/MIT.txt`), except Henke's C code: in `src/` (lightly
+modified) and, unmodified, in `rust/base91-testkit/reference/`
+(BSD-3-Clause, `LICENSES/BSD-3-Clause.txt`).
+
+## Acknowledgements
+
+The basE91 format and its original C implementation are by Joachim Henke
+(<http://base91.sourceforge.net/>).

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 [workspace]
-members  = ["base91", "base91-cli", "base91-testkit", "base91/fuzz"]
+members  = ["base91", "base91-cli", "base91-capi", "base91-testkit", "base91-bench", "base91/fuzz"]
 resolver = "2"
 
 # The one version of base91-rs, base91-cli, base91-testkit and pybase91
