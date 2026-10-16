@@ -42,7 +42,9 @@ BSD-3-Clause and MIT).
   - [x] x86_64-linux
   - [ ] aarch64-linux
   - [ ] aarch64-darwin
-  - (`python311Packages` to `python314Packages`, tests passing.  Upstream
+  - (`python311Packages` to `python314Packages`, tests passing;
+    `python315Packages` fails, as PyO3 0.26 supports Python up to 3.14.
+    Upstream
     CI builds wheels of the same crate for Linux and macOS, x86_64 and
     aarch64.)
 - Tested, as applicable:

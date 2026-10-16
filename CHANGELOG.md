@@ -13,6 +13,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- Each release gets its GitHub release, with its changelog section as
+  notes, created by `publish.yaml` once the crates and pybase91 are
+  published.
+
+---
+
 ## [0.3.3] - 2026-10-16
 
 The SIMD variant in Python and C: `pybase91` gains SIMD functions and
@@ -354,6 +364,7 @@ implementation at <http://base91.sourceforge.net/>.
 Original C implementation by Joachim Henke.
 Source preserved unchanged in `src/`.
 
+[Unreleased]: https://github.com/douzebis/base91/compare/v0.3.3...HEAD
 [0.3.3]: https://github.com/douzebis/base91/releases/tag/v0.3.3
 [0.3.2]: https://github.com/douzebis/base91/releases/tag/v0.3.2
 [0.3.1]: https://github.com/douzebis/base91/releases/tag/v0.3.1
