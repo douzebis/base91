@@ -13,7 +13,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [0.3.3] - 2026-10-16
+
+The SIMD variant in Python and C: `pybase91` gains SIMD functions and
+classes, and `libbase91` is rebuilt on base91-rs, with Henke's basE91 API,
+binary compatible, and an API for both formats (spec 0014). A crates.io
+page that shows the speed (spec 0015). No change to the Rust API or the
+formats.
 
 ### Added
 
@@ -348,7 +354,7 @@ implementation at <http://base91.sourceforge.net/>.
 Original C implementation by Joachim Henke.
 Source preserved unchanged in `src/`.
 
-[Unreleased]: https://github.com/douzebis/base91/compare/v0.3.2...HEAD
+[0.3.3]: https://github.com/douzebis/base91/releases/tag/v0.3.3
 [0.3.2]: https://github.com/douzebis/base91/releases/tag/v0.3.2
 [0.3.1]: https://github.com/douzebis/base91/releases/tag/v0.3.1
 [0.3.0]: https://github.com/douzebis/base91/releases/tag/v0.3.0

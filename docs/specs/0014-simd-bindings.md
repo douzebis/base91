@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0014 — Python and C bindings aligned with the SIMD variant
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-16
 
 ## Problem
 

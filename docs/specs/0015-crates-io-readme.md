@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0015 — A crates.io page that sells the speed
 
-**Status:** draft
+**Status:** implemented
 **App:** base91
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-16
 
 ## Problem
 

@@ -12,8 +12,8 @@ resolver = "2"
 # the same: crates.io needs a version on a path dependency, and cargo cannot
 # take it from workspace.package.
 [workspace.package]
-version = "0.3.3-dev"
+version = "0.3.3"
 
 [workspace.dependencies]
-base91         = { package = "base91-rs", path = "base91", version = "0.3.3-dev", default-features = false }
-base91-testkit = { path = "base91-testkit", version = "0.3.3-dev" }
+base91         = { package = "base91-rs", path = "base91", version = "0.3.3", default-features = false }
+base91-testkit = { path = "base91-testkit", version = "0.3.3" }
