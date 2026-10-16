@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+# The section of CHANGELOG.md for VERSION, without its heading: the notes of
+# the GitHub release (.github/workflows/publish.yaml).
+#
+#   scripts/release-notes 0.3.3 > notes.md
+
+import sys
+
+version = sys.argv[1].removeprefix("v")
+lines = open("CHANGELOG.md", encoding="utf-8").read().splitlines()
+try:
+    start = next(
+        i for i, line in enumerate(lines) if line.startswith(f"## [{version}]")
+    )
+except StopIteration:
+    sys.exit(f"release-notes: no section for {version} in CHANGELOG.md")
+end = next(
+    (i for i in range(start + 1, len(lines)) if lines[i].strip() == "---"), len(lines)
+)
+notes = "\n".join(lines[start + 1 : end]).strip()
+if not notes:
+    sys.exit(f"release-notes: the section for {version} is empty")
+print(notes)

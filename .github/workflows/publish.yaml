@@ -16,6 +16,9 @@
 # The uploads are resumable: a crate already published at this version is
 # skipped, and so is a file already on PyPI, so if one fails halfway,
 # re-running its job finishes the release.
+#
+# Then `github-release` creates the tag's GitHub release, with the version's
+# CHANGELOG.md section as its notes.
 
 name: Publish
 
@@ -185,3 +188,28 @@ jobs:
           # Files already on PyPI are skipped, so a re-run finishes a
           # half-done upload.
           skip-existing: true
+
+  # The GitHub release of the tag, once both registries have the version:
+  # its notes are the version's section of CHANGELOG.md. It also makes the
+  # version visible to r-ryantm, which watches the GitHub releases API to
+  # propose the nixpkgs update. Skipped if the release exists (a re-run).
+  github-release:
+    name: GitHub release
+    needs: [publish-crates, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME exists: skipped"
+            exit 0
+          fi
+          scripts/release-notes "$GITHUB_REF_NAME" > notes.md
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "${GITHUB_REF_NAME#v}" --notes-file notes.md --latest

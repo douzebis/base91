@@ -165,6 +165,11 @@ One workflow for both registries, replacing `pypi.yml`:
   `skip-existing: true` for the same effect.
 - **Least privilege:** only the two publish jobs get `id-token: write`.
   Every third-party action is pinned by commit hash.
+- **`github-release`** (needs both publish jobs; added 2026-10-16): the
+  tag's GitHub release, its notes the version's section of `CHANGELOG.md`
+  (`scripts/release-notes`); skipped if it exists.  It is also what makes
+  the version visible to r-ryantm, which watches the GitHub releases API:
+  tags alone are not releases.
 
 A tag pushed by mistake is harmless: reject the pending approvals and
 delete the tag.

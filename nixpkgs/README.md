@@ -54,8 +54,10 @@ description, from the nixpkgs PR template) and `pr-briefing-<package>.md`
      `base91-testkit`, `base91-rs`, then `base91-cli`;
    - `Publish to PyPI` (environment `pypi`): publishes pybase91.
 
-   If an upload fails halfway, re-run its job: what is already published
-   is skipped.  A tag pushed by mistake: reject the approvals, delete the
+   Once both are published, the workflow creates the tag's GitHub release
+   (notes: the version's section of `CHANGELOG.md`), which r-ryantm
+   watches to propose the nixpkgs update.  If an upload fails halfway,
+   re-run its job: what is already published is skipped.  A tag pushed by mistake: reject the approvals, delete the
    tag.
 4. nixpkgs, in a checkout of `master`:
    - copy the staged files (and, the first time, add the
